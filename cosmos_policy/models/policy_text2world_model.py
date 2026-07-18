@@ -556,9 +556,22 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
             self.config.mask_loss_for_action_future_state_prediction
             or self.config.mask_current_state_action_for_value_prediction
             or self.config.mask_future_state_for_qvalue_prediction
+            or self.config.mask_value_prediction_loss_for_policy_prediction
             or self.config.action_loss_multiplier != 1
         ):
             kendall_loss = kendall_loss * rearrange(final_mask_B_T, "b t -> b 1 t 1 1")
+            if self.config.mask_value_prediction_loss_for_policy_prediction and not getattr(
+                self, "_verified_value_prediction_loss_mask", False
+            ):
+                masked_value_loss = kendall_loss[
+                    batch_indices,
+                    :,
+                    value_indices,
+                    :,
+                    :,
+                ]
+                assert torch.count_nonzero(masked_value_loss).item() == 0, "Value prediction loss was not masked"
+                self._verified_value_prediction_loss_mask = True
 
         # Get losses for future third-person image prediction
         if torch.all(future_image_indices != -1):  # -1 indicates future third-person image is not used
