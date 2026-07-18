@@ -1,0 +1,177 @@
+{
+  "format": "Cosmos Policy ALOHA MP4+HDF5",
+  "task_description": "fold the blue towel twice",
+  "fps": 25,
+  "image_size": [
+    256,
+    256
+  ],
+  "action_semantics": "absolute leader joint positions: left[7], right[7]",
+  "proprio_semantics": "measured follower joint positions: left[7], right[7]",
+  "camera_mapping": {
+    "left_wrist": "/camera/right/image",
+    "right_wrist": "/camera/left/image",
+    "external": "/camera/ego/image"
+  },
+  "excluded_episodes": [
+    "episode_20260715_182333_649312.mcap",
+    "episode_20260715_201409_236022.mcap"
+  ],
+  "episodes": [
+    {
+      "source_episode": "episode_20260715_145425_137522.mcap",
+      "split": "train",
+      "output_stem": "episode_0",
+      "num_steps": 832
+    },
+    {
+      "source_episode": "episode_20260715_145905_761098.mcap",
+      "split": "train",
+      "output_stem": "episode_1",
+      "num_steps": 954
+    },
+    {
+      "source_episode": "episode_20260715_150002_298701.mcap",
+      "split": "train",
+      "output_stem": "episode_2",
+      "num_steps": 915
+    },
+    {
+      "source_episode": "episode_20260715_150242_863072.mcap",
+      "split": "train",
+      "output_stem": "episode_3",
+      "num_steps": 1003
+    },
+    {
+      "source_episode": "episode_20260715_150438_149428.mcap",
+      "split": "train",
+      "output_stem": "episode_4",
+      "num_steps": 1053
+    },
+    {
+      "source_episode": "episode_20260715_151740_438029.mcap",
+      "split": "train",
+      "output_stem": "episode_5",
+      "num_steps": 931
+    },
+    {
+      "source_episode": "episode_20260715_152356_450794.mcap",
+      "split": "train",
+      "output_stem": "episode_6",
+      "num_steps": 712
+    },
+    {
+      "source_episode": "episode_20260715_162620_353943.mcap",
+      "split": "train",
+      "output_stem": "episode_7",
+      "num_steps": 685
+    },
+    {
+      "source_episode": "episode_20260715_163901_010358.mcap",
+      "split": "val",
+      "output_stem": "episode_0",
+      "num_steps": 851
+    },
+    {
+      "source_episode": "episode_20260715_164141_577084.mcap",
+      "split": "train",
+      "output_stem": "episode_8",
+      "num_steps": 804
+    },
+    {
+      "source_episode": "episode_20260715_164438_333482.mcap",
+      "split": "train",
+      "output_stem": "episode_9",
+      "num_steps": 768
+    },
+    {
+      "source_episode": "episode_20260715_164533_028056.mcap",
+      "split": "train",
+      "output_stem": "episode_10",
+      "num_steps": 1109
+    },
+    {
+      "source_episode": "episode_20260715_164643_288719.mcap",
+      "split": "train",
+      "output_stem": "episode_11",
+      "num_steps": 534
+    },
+    {
+      "source_episode": "episode_20260715_164723_725260.mcap",
+      "split": "train",
+      "output_stem": "episode_12",
+      "num_steps": 445
+    },
+    {
+      "source_episode": "episode_20260715_171207_933690.mcap",
+      "split": "train",
+      "output_stem": "episode_13",
+      "num_steps": 837
+    },
+    {
+      "source_episode": "episode_20260715_173605_851007.mcap",
+      "split": "train",
+      "output_stem": "episode_14",
+      "num_steps": 812
+    },
+    {
+      "source_episode": "episode_20260715_181715_354406.mcap",
+      "split": "val",
+      "output_stem": "episode_1",
+      "num_steps": 820
+    },
+    {
+      "source_episode": "episode_20260715_181818_639233.mcap",
+      "split": "train",
+      "output_stem": "episode_15",
+      "num_steps": 1179
+    },
+    {
+      "source_episode": "episode_20260715_182002_583016.mcap",
+      "split": "train",
+      "output_stem": "episode_16",
+      "num_steps": 682
+    },
+    {
+      "source_episode": "episode_20260715_191835_098304.mcap",
+      "split": "train",
+      "output_stem": "episode_17",
+      "num_steps": 1096
+    },
+    {
+      "source_episode": "episode_20260715_192056_467510.mcap",
+      "split": "train",
+      "output_stem": "episode_18",
+      "num_steps": 718
+    },
+    {
+      "source_episode": "episode_20260715_192150_464766.mcap",
+      "split": "train",
+      "output_stem": "episode_19",
+      "num_steps": 785
+    },
+    {
+      "source_episode": "episode_20260715_192240_181724.mcap",
+      "split": "train",
+      "output_stem": "episode_20",
+      "num_steps": 862
+    },
+    {
+      "source_episode": "episode_20260715_193048_516004.mcap",
+      "split": "train",
+      "output_stem": "episode_21",
+      "num_steps": 593
+    },
+    {
+      "source_episode": "episode_20260715_193129_198149.mcap",
+      "split": "train",
+      "output_stem": "episode_22",
+      "num_steps": 595
+    }
+  ],
+  "num_episodes": 25,
+  "num_train_episodes": 23,
+  "num_val_episodes": 2,
+  "num_steps": 20575,
+  "normalization_statistics_scope": "train split only"
+}

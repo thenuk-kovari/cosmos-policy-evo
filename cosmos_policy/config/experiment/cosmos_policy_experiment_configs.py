@@ -461,6 +461,91 @@ cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbow
     )
 )
 
+# I2RT YAM: fold the blue towel twice.
+#
+# Keep the value latent in the sequence for compatibility with the stock ALOHA
+# inference path, but exclude value prediction from the loss. Demo samples train
+# p(a, s' | s); copied-success-rollout samples train p(s' | s, a).
+YAM_FOLD_TOWEL_DATA_DIR = os.environ.get(
+    "YAM_FOLD_TOWEL_DATA_DIR",
+    os.path.join(BASE_DATASETS_DIR, "fold_blue_towel_twice"),
+)
+yam_fold_towel_dataset = L(ALOHADataset)(
+    data_dir=YAM_FOLD_TOWEL_DATA_DIR,
+    t5_text_embeddings_path=os.path.join(YAM_FOLD_TOWEL_DATA_DIR, "t5_embeddings.pkl"),
+    chunk_size=50,
+    use_image_aug=True,
+    use_stronger_image_aug=True,
+    use_proprio=True,
+    normalize_proprio=True,
+    normalize_actions=True,
+    num_duplicates_per_image=4,
+    treat_demos_as_success_rollouts=True,
+    demonstration_sampling_prob=0.75,
+    success_rollout_sampling_prob=1.0,
+    return_value_function_returns=True,
+    p_world_model=1.0,
+    gamma=0.998,
+)
+cosmos_predict2_2b_480p_aloha_yam_fold_blue_towel_twice = LazyDict(
+    dict(
+        defaults=[
+            "/experiment/cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbowl45_candyinbag45_eggplantchickenonplate80",
+            "_self_",
+        ],
+        trainer=dict(
+            max_iter=10000,
+        ),
+        scheduler=dict(
+            # Warm up for 500 steps, decay through 7.5K, then sharply drop
+            # and hold at 6e-6 for the final 2.5K optimizer steps.
+            cycle_lengths=[7500, 100000000000000],
+            warm_up_steps=[500, 0],
+            f_start=[1e-6, 0.06],
+            f_max=[1.0, 0.06],
+            f_min=[0.3, 0.06],
+        ),
+        checkpoint=dict(
+            save_iter=1000,
+            save_to_object_store=dict(
+                enabled=True,
+                credentials="",
+                bucket="policy-training",
+            ),
+            load_from_object_store=dict(
+                enabled=False,
+                credentials="",
+                bucket="policy-training",
+            ),
+        ),
+        model=L(CosmosPolicyVideo2WorldModel)(
+            config=dict(
+                mask_value_prediction_loss_for_policy_prediction=True,
+            ),
+        ),
+        dataloader_train=L(DataLoader)(
+            num_workers=12,
+            persistent_workers=True,
+            pin_memory=True,
+            dataset=yam_fold_towel_dataset,
+            sampler=L(DistributedSampler)(
+                dataset=yam_fold_towel_dataset,
+                num_replicas=L(parallel_state.get_data_parallel_world_size)(),
+                rank=L(parallel_state.get_data_parallel_rank)(),
+                shuffle=True,
+                seed=0,
+            ),
+            batch_size=25,
+            drop_last=True,
+        ),
+        job=dict(
+            project="cosmos-policy-fold-towel",
+            group="yam",
+            name="predict2-2b-23demos-75policy-25world",
+        ),
+    )
+)
+
 
 def register_configs():
     cs = ConfigStore.instance()
@@ -477,6 +562,7 @@ def register_configs():
         cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbowl45_candyinbag45_eggplantchickenonplate80__inference_only,
         cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbowl45_candyinbag45_eggplantchickenonplate80__resumeFrom50K_648_rollouts_Vsprime_value_func,  # ALOHA planning model
         cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbowl45_candyinbag45_eggplantchickenonplate80__resumeFrom50K_648_rollouts_Vsprime_value_func__inference_only,
+        cosmos_predict2_2b_480p_aloha_yam_fold_blue_towel_twice,
     ]:
         experiment_name = _item["job"]["name"]
         log.info(f"Registering experiment: {experiment_name}")
