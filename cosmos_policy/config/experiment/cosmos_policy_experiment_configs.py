@@ -470,6 +470,10 @@ YAM_FOLD_TOWEL_DATA_DIR = os.environ.get(
     "YAM_FOLD_TOWEL_DATA_DIR",
     os.path.join(BASE_DATASETS_DIR, "fold_blue_towel_twice"),
 )
+YAM_S3_CREDENTIALS = os.environ.get(
+    "YAM_S3_CREDENTIALS",
+    "credentials/s3_training.secret",
+)
 yam_fold_towel_dataset = L(ALOHADataset)(
     data_dir=YAM_FOLD_TOWEL_DATA_DIR,
     t5_text_embeddings_path=os.path.join(YAM_FOLD_TOWEL_DATA_DIR, "t5_embeddings.pkl"),
@@ -509,12 +513,12 @@ cosmos_predict2_2b_480p_aloha_yam_fold_blue_towel_twice = LazyDict(
             save_iter=1000,
             save_to_object_store=dict(
                 enabled=True,
-                credentials="",
+                credentials=YAM_S3_CREDENTIALS,
                 bucket="policy-training",
             ),
             load_from_object_store=dict(
                 enabled=False,
-                credentials="",
+                credentials=YAM_S3_CREDENTIALS,
                 bucket="policy-training",
             ),
         ),

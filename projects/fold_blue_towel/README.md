@@ -49,18 +49,23 @@ Build the pinned official environment:
 sudo docker build -t cosmos-policy docker
 ```
 
-Mount the repository, dataset, uv cache, uv-managed Python directory, AWS
-credentials, and a persistent output directory. Inside the container set:
+Mount the repository, dataset, uv cache, uv-managed Python directory, a
+persistent output directory, and the two runtime secret files. Inside the
+container set:
 
 ```bash
 export YAM_FOLD_TOWEL_DATA_DIR=/data/fold_blue_towel_twice
 export IMAGINAIRE_OUTPUT_ROOT=/outputs
 export WANDB_API_KEY
+export YAM_S3_CREDENTIALS=/run/secrets/cosmos_s3.json
 projects/fold_blue_towel/train.sh
 ```
 
-The AWS SDK credential chain must be available inside the container. Do not put
-the W&B key or AWS credentials in this repository or a shell script.
+`YAM_S3_CREDENTIALS` must point to the Cosmos MSC backend's JSON credential
+file. It contains `aws_access_key_id`, `aws_secret_access_key`, `region_name`,
+and `endpoint_url`. Mount it read-only into the container. The ordinary AWS SDK
+credential chain alone is not sufficient for this backend. Do not put the W&B
+key or AWS credentials in this repository, image, or shell script.
 
 ## Resume
 
