@@ -109,6 +109,40 @@ def replace_latent_with_action_chunk(
     return new_x0
 
 
+def action_chunk_mask_to_latent_frame(action_chunk: torch.Tensor, action_dim_mask: torch.Tensor, latent_frame: torch.Tensor) -> torch.Tensor:
+    """Expand an action availability mask using the action latent's repeat layout."""
+    if action_dim_mask.ndim == 2:
+        action_dim_mask = action_dim_mask[:, None, :].expand_as(action_chunk)
+    if action_dim_mask.shape != action_chunk.shape:
+        raise ValueError(
+            f"action_dim_mask must have shape (B, D) or {tuple(action_chunk.shape)}, got {tuple(action_dim_mask.shape)}"
+        )
+    batch_size = action_chunk.shape[0]
+    flat_mask = action_dim_mask.to(device=latent_frame.device, dtype=latent_frame.dtype).reshape(batch_size, -1)
+    latent_elements = latent_frame[0].numel()
+    if flat_mask.shape[1] > latent_elements:
+        raise ValueError(f"Action mask has {flat_mask.shape[1]} elements but latent frame only has {latent_elements}")
+    num_repeats = (latent_elements + flat_mask.shape[1] - 1) // flat_mask.shape[1]
+    return flat_mask.repeat(1, num_repeats)[:, :latent_elements].reshape_as(latent_frame)
+
+
+def proprio_mask_to_latent_frame(
+    proprio: torch.Tensor, proprio_dim_mask: torch.Tensor, latent_frame: torch.Tensor
+) -> torch.Tensor:
+    """Expand a proprio availability mask using the proprio latent repeat layout."""
+    if proprio_dim_mask.shape != proprio.shape:
+        raise ValueError(
+            f"proprio_dim_mask must have shape {tuple(proprio.shape)}, got {tuple(proprio_dim_mask.shape)}"
+        )
+    batch_size = proprio.shape[0]
+    flat_mask = proprio_dim_mask.to(device=latent_frame.device, dtype=latent_frame.dtype).reshape(batch_size, -1)
+    latent_elements = latent_frame[0].numel()
+    if flat_mask.shape[1] > latent_elements:
+        raise ValueError(f"Proprio mask has {flat_mask.shape[1]} elements but latent frame only has {latent_elements}")
+    num_repeats = (latent_elements + flat_mask.shape[1] - 1) // flat_mask.shape[1]
+    return flat_mask.repeat(1, num_repeats)[:, :latent_elements].reshape_as(latent_frame)
+
+
 def replace_latent_with_proprio(x0: torch.Tensor, proprio: torch.Tensor, proprio_indices: torch.Tensor) -> torch.Tensor:
     """
     Replaces the image latent (at the specified proprio index) in clean input image latents x0 with the proprio.
@@ -278,8 +312,10 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
             epsilon_B_C_T_H_W,
             sigma_B_T,
             action_chunk=data_batch["actions"],
+            action_dim_mask=data_batch.get("action_dim_mask", torch.ones_like(data_batch["actions"])),
             action_indices=data_batch["action_latent_idx"],
             proprio=data_batch["proprio"],
+            proprio_dim_mask=data_batch.get("proprio_dim_mask", torch.ones_like(data_batch["proprio"])),
             current_proprio_indices=data_batch["current_proprio_latent_idx"],
             future_proprio=data_batch["future_proprio"],
             future_proprio_indices=data_batch["future_proprio_latent_idx"],
@@ -314,8 +350,10 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
         epsilon_B_C_T_H_W: torch.Tensor,
         sigma_B_T: torch.Tensor,
         action_chunk: torch.Tensor,
+        action_dim_mask: torch.Tensor,
         action_indices: torch.Tensor,
         proprio: torch.Tensor,
+        proprio_dim_mask: torch.Tensor,
         current_proprio_indices: torch.Tensor,
         future_proprio: torch.Tensor,
         future_proprio_indices: torch.Tensor,
@@ -345,8 +383,10 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
             epsilon_B_C_T_H_W: noise
             sigma_B_T: noise level
             action_chunk: ground truth action chunk
+            action_dim_mask: per-sample availability mask with shape (B, D) or (B, K, D)
             action_indices: indices for action latent frames
             proprio: current proprioception
+            proprio_dim_mask: per-sample proprio availability mask with shape (B, D)
             current_proprio_indices: indices for current proprio latent frames
             future_proprio: future proprioception
             future_proprio_indices: indices for future proprio latent frames
@@ -383,6 +423,11 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
             action_chunk,
             action_indices=action_indices,
         )
+        action_latent_mask = action_chunk_mask_to_latent_frame(
+            action_chunk,
+            action_dim_mask,
+            x0_B_C_T_H_W[batch_indices, :, action_indices, :, :],
+        )
         # Proprio
         if torch.all(current_proprio_indices != -1):  # -1 indicates proprio is not used
             x0_B_C_T_H_W = replace_latent_with_proprio(
@@ -391,16 +436,27 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
                 proprio_indices=current_proprio_indices,
             )
         # Future proprio
+        future_proprio_latent_mask = None
         if torch.all(future_proprio_indices != -1):  # -1 indicates future proprio is not used
             x0_B_C_T_H_W = replace_latent_with_proprio(
                 x0_B_C_T_H_W,
                 future_proprio,
                 proprio_indices=future_proprio_indices,
             )
+            future_proprio_latent_mask = proprio_mask_to_latent_frame(
+                future_proprio,
+                proprio_dim_mask,
+                x0_B_C_T_H_W[batch_indices, :, future_proprio_indices, :, :],
+            )
         # Value
         x0_B_C_T_H_W[batch_indices, :, value_indices, :, :] = (
             value_function_return.reshape(-1, 1, 1, 1).expand(-1, C_latent, H_latent, W_latent).to(x0_B_C_T_H_W.dtype)
         )
+
+        # Unavailable action dimensions are deterministic blanks, not targets.
+        epsilon_B_C_T_H_W[batch_indices, :, action_indices, :, :] *= action_latent_mask
+        if future_proprio_latent_mask is not None:
+            epsilon_B_C_T_H_W[batch_indices, :, future_proprio_indices, :, :] *= future_proprio_latent_mask
 
         # Get the mean and stand deviation of the marginal probability distribution.
         mean_B_C_T_H_W, std_B_T = self.sde.marginal_prob(x0_B_C_T_H_W, sigma_B_T)
@@ -545,33 +601,41 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
                 self.config.action_loss_multiplier
             )
 
+        final_mask_B_C_T_H_W = (
+            rearrange(final_mask_B_T, "b t -> b 1 t 1 1")
+            .expand_as(x0_B_C_T_H_W)
+            .clone()
+            .to(dtype=x0_B_C_T_H_W.dtype)
+        )
+        active_per_sample = action_latent_mask.reshape(B, -1).sum(dim=1)
+        if torch.any(active_per_sample <= 0):
+            raise ValueError("Every training sample must supervise at least one action dimension")
+        action_mask_weighted = action_latent_mask * (action_latent_mask[0].numel() / active_per_sample).reshape(B, 1, 1, 1)
+        final_mask_B_C_T_H_W[batch_indices, :, action_indices, :, :] *= action_mask_weighted
+        if future_proprio_latent_mask is not None:
+            proprio_active = future_proprio_latent_mask.reshape(B, -1).sum(dim=1)
+            if torch.any(proprio_active <= 0):
+                raise ValueError("Every proprio sample must expose at least one dimension")
+            proprio_mask_weighted = future_proprio_latent_mask * (
+                future_proprio_latent_mask[0].numel() / proprio_active
+            ).reshape(B, 1, 1, 1)
+            final_mask_B_C_T_H_W[batch_indices, :, future_proprio_indices, :, :] *= proprio_mask_weighted
+
         # extra loss mask for each sample, for example, human faces, hands
         pred_mse_B_C_T_H_W = (x0_B_C_T_H_W - model_pred.x0) ** 2
         edm_loss_B_C_T_H_W = pred_mse_B_C_T_H_W * rearrange(weights_per_sigma_B_T, "b t -> b 1 t 1 1")
 
         kendall_loss = edm_loss_B_C_T_H_W
 
-        # Apply the loss mask to the loss
-        if (
-            self.config.mask_loss_for_action_future_state_prediction
-            or self.config.mask_current_state_action_for_value_prediction
-            or self.config.mask_future_state_for_qvalue_prediction
-            or self.config.mask_value_prediction_loss_for_policy_prediction
-            or self.config.action_loss_multiplier != 1
+        # Always apply the element-level mask: it includes both prediction-mode
+        # selection and per-action-dimension availability.
+        kendall_loss = kendall_loss * final_mask_B_C_T_H_W
+        if self.config.mask_value_prediction_loss_for_policy_prediction and not getattr(
+            self, "_verified_value_prediction_loss_mask", False
         ):
-            kendall_loss = kendall_loss * rearrange(final_mask_B_T, "b t -> b 1 t 1 1")
-            if self.config.mask_value_prediction_loss_for_policy_prediction and not getattr(
-                self, "_verified_value_prediction_loss_mask", False
-            ):
-                masked_value_loss = kendall_loss[
-                    batch_indices,
-                    :,
-                    value_indices,
-                    :,
-                    :,
-                ]
-                assert torch.count_nonzero(masked_value_loss).item() == 0, "Value prediction loss was not masked"
-                self._verified_value_prediction_loss_mask = True
+            masked_value_loss = kendall_loss[batch_indices, :, value_indices, :, :]
+            assert torch.count_nonzero(masked_value_loss).item() == 0, "Value prediction loss was not masked"
+            self._verified_value_prediction_loss_mask = True
 
         # Get losses for future third-person image prediction
         if torch.all(future_image_indices != -1):  # -1 indicates future third-person image is not used
@@ -653,12 +717,16 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
         action_diff = (
             x0_B_C_T_H_W[batch_indices, :, action_indices, :, :] - model_pred.x0[batch_indices, :, action_indices, :, :]
         )
+        action_diff_mask = action_latent_mask.to(action_diff.dtype)
         action_diff_demo = action_diff[rollout_data_mask == 0]
+        action_diff_mask_demo = action_diff_mask[rollout_data_mask == 0]
         action_diff_world_model = action_diff[world_model_sample_mask == 1]
-        demo_sample_action_mse_loss = (action_diff_demo**2).mean()
-        demo_sample_action_l1_loss = torch.abs(action_diff_demo).mean()
-        all_samples_action_mse_loss = (action_diff**2).mean()
-        all_samples_action_l1_loss = torch.abs(action_diff).mean()
+        demo_action_denom = action_diff_mask_demo.sum().clamp_min(1)
+        all_action_denom = action_diff_mask.sum().clamp_min(1)
+        demo_sample_action_mse_loss = ((action_diff_demo**2) * action_diff_mask_demo).sum() / demo_action_denom
+        demo_sample_action_l1_loss = (torch.abs(action_diff_demo) * action_diff_mask_demo).sum() / demo_action_denom
+        all_samples_action_mse_loss = ((action_diff**2) * action_diff_mask).sum() / all_action_denom
+        all_samples_action_l1_loss = (torch.abs(action_diff) * action_diff_mask).sum() / all_action_denom
 
         # Get losses for value function prediction
         value_diff = (
@@ -675,6 +743,19 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
         value_function_sample_value_l1_loss = torch.abs(value_diff_value_function).mean()
         all_samples_value_mse_loss = (value_diff**2).mean()
         all_samples_value_l1_loss = torch.abs(value_diff).mean()
+
+        if not torch.any(value_function_sample_mask):
+            # Value prediction is not an objective in policy-only runs. Emitting
+            # finite diagnostics here produces a misleading exploding W&B curve.
+            nan = torch.tensor(float("nan"), device=x0_B_C_T_H_W.device)
+            demo_sample_value_mse_loss = nan
+            demo_sample_value_l1_loss = nan
+            world_model_sample_value_mse_loss = nan
+            world_model_sample_value_l1_loss = nan
+            value_function_sample_value_mse_loss = nan
+            value_function_sample_value_l1_loss = nan
+            all_samples_value_mse_loss = nan
+            all_samples_value_l1_loss = nan
 
         output_batch = {
             "x0": x0_B_C_T_H_W,

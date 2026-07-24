@@ -23,6 +23,7 @@ from cosmos_policy._src.imaginaire.lazy_config import LazyDict
 from cosmos_policy._src.imaginaire.utils import log
 from cosmos_policy._src.imaginaire.utils.checkpoint_db import get_checkpoint_path  # noqa: F401
 from cosmos_policy.datasets.aloha_dataset import ALOHADataset
+from cosmos_policy.datasets.umi_aloha_dataset import UMIALOHADataset
 from cosmos_policy.datasets.libero_dataset import LIBERODataset
 from cosmos_policy.datasets.robocasa_dataset import RoboCasaDataset
 from cosmos_policy.models.policy_video2world_model import CosmosPolicyVideo2WorldModel
@@ -550,6 +551,83 @@ cosmos_predict2_2b_480p_aloha_yam_fold_blue_towel_twice = LazyDict(
     )
 )
 
+UMI_LARGE_BLUE_TOWEL_DATA_DIR = os.environ.get(
+    "UMI_LARGE_BLUE_TOWEL_DATA_DIR",
+    os.path.join(BASE_DATASETS_DIR, "umi_large_blue_towel"),
+)
+umi_large_blue_towel_dataset = L(UMIALOHADataset)(
+    data_dir=UMI_LARGE_BLUE_TOWEL_DATA_DIR,
+    t5_text_embeddings_path=os.path.join(UMI_LARGE_BLUE_TOWEL_DATA_DIR, "t5_embeddings.pkl"),
+    chunk_size=50,
+    use_image_aug=True,
+    use_stronger_image_aug=True,
+    use_proprio=True,
+    normalize_proprio=True,
+    normalize_actions=True,
+    num_duplicates_per_image=4,
+    treat_demos_as_success_rollouts=True,
+    demonstration_sampling_prob=0.75,
+    success_rollout_sampling_prob=1.0,
+    return_value_function_returns=True,
+    p_world_model=1.0,
+    gamma=0.998,
+)
+cosmos_predict2_2b_480p_umi_large_blue_towel_ee12 = LazyDict(
+    dict(
+        defaults=[
+            "/experiment/cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbowl45_candyinbag45_eggplantchickenonplate80",
+            "_self_",
+        ],
+        trainer=dict(max_iter=8000),
+        scheduler=dict(
+            cycle_lengths=[6000, 100000000000000],
+            warm_up_steps=[400, 0],
+            f_start=[1e-6, 0.06],
+            f_max=[1.0, 0.06],
+            f_min=[0.3, 0.06],
+        ),
+        checkpoint=dict(
+            save_iter=1000,
+            save_to_object_store=dict(
+                enabled=True,
+                credentials=YAM_S3_CREDENTIALS,
+                bucket="policy-training",
+            ),
+            load_from_object_store=dict(
+                enabled=False,
+                credentials=YAM_S3_CREDENTIALS,
+                bucket="policy-training",
+            ),
+        ),
+        model=L(CosmosPolicyVideo2WorldModel)(
+            config=dict(
+                mask_loss_for_action_future_state_prediction=True,
+                mask_value_prediction_loss_for_policy_prediction=False,
+            ),
+        ),
+        dataloader_train=L(DataLoader)(
+            num_workers=12,
+            persistent_workers=True,
+            pin_memory=True,
+            dataset=umi_large_blue_towel_dataset,
+            sampler=L(DistributedSampler)(
+                dataset=umi_large_blue_towel_dataset,
+                num_replicas=L(parallel_state.get_data_parallel_world_size)(),
+                rank=L(parallel_state.get_data_parallel_rank)(),
+                shuffle=True,
+                seed=0,
+            ),
+            batch_size=25,
+            drop_last=True,
+        ),
+        job=dict(
+            project="cosmos-policy-large-blue-towel",
+            group="umi-ee12",
+            name="predict2-2b-48demos-umi-ee12-8k",
+        ),
+    )
+)
+
 
 def register_configs():
     cs = ConfigStore.instance()
@@ -567,6 +645,7 @@ def register_configs():
         cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbowl45_candyinbag45_eggplantchickenonplate80__resumeFrom50K_648_rollouts_Vsprime_value_func,  # ALOHA planning model
         cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbowl45_candyinbag45_eggplantchickenonplate80__resumeFrom50K_648_rollouts_Vsprime_value_func__inference_only,
         cosmos_predict2_2b_480p_aloha_yam_fold_blue_towel_twice,
+        cosmos_predict2_2b_480p_umi_large_blue_towel_ee12,
     ]:
         experiment_name = _item["job"]["name"]
         log.info(f"Registering experiment: {experiment_name}")
