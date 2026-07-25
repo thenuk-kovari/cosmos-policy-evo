@@ -10,7 +10,7 @@ from mcap_ros2.decoder import DecoderFactory
 import pinocchio as pin
 
 FPS=25; TASK='fold the large blue towel twice'; GRIP=.901637; ACTION_DIM=29
-TOPICS=['/joint_states','/left_arm/joint_trajectory','/right_arm/joint_trajectory','/left_arm/gripper/commanded_position','/right_arm/gripper/commanded_position','/elevator/commanded_position','/left_arm/fk_pose','/right_arm/fk_pose','/robot_description','/base/image_raw/compressed','/left_arm/image_raw/compressed','/right_arm/image_raw/compressed']
+TOPICS=['/joint_states','/left_arm/joint_trajectory','/right_arm/joint_trajectory','/left_arm/gripper/commanded_position','/right_arm/gripper/commanded_position','/elevator/commanded_position','/left_arm/fk_pose','/right_arm/fk_pose','/robot_description','/base/image_raw/compressed','/left_arm/image_raw/compressed','/right_arm/image_raw/compressed','/left_gripper_controller/commands','/right_gripper_controller/commands','/elevator/cmd_vel']
 CAMS={'cam_high':'/base/image_raw/compressed','cam_left_wrist':'/left_arm/image_raw/compressed','cam_right_wrist':'/right_arm/image_raw/compressed'}
 
 def nearest(t,x):
@@ -27,7 +27,7 @@ def read(path):
 def stream(rows,fn):
  t=np.array([x[0] for x in rows],float); v=[fn(x[1]) for x in rows]; o=np.argsort(t); return t[o],np.asarray(v,object if fn.__name__=='blob' else None)[o]
 def blob(x): return bytes(x.data)
-def scalar(x): return float(x.data)
+def scalar(x): return float(np.asarray(x.data).reshape(-1)[0])
 def pose_to_6(p): return np.r_[p[:3],Rotation.from_quat(p[3:7]).as_rotvec()]
 def joint_dict(x): return dict(zip(x.name,map(float,x.position)))
 def traj(rows):
@@ -53,7 +53,16 @@ def fk(model,data,qdict):
   ans.append((m.translation.copy(),Rotation.from_matrix(m.rotation)))
  return ans
 def write_video(path,rows,grid,size):
- t=np.array([x[0] for x in rows]); vals=[blob(x[1]) for x in rows]; ix=nearest(t,grid)
+ valid=[]; bad=0
+ for t,msg in rows:
+  b=blob(msg)
+  try:
+   with Image.open(io.BytesIO(b)) as im: im.verify()
+   valid.append((t,b))
+  except Exception: bad+=1
+ if not valid or bad/max(1,len(rows))>0.02: raise RuntimeError(f'camera corruption too high for {path.name}: {bad}/{len(rows)}')
+ if bad: print(f'WARNING {path.name}: substituting nearest valid frame for {bad}/{len(rows)} corrupt messages',flush=True)
+ t=np.array([x[0] for x in valid]); vals=[x[1] for x in valid]; ix=nearest(t,grid)
  w=imageio_ffmpeg.write_frames(str(path),(size,size),fps=FPS,codec='libx264',pix_fmt_in='rgb24',pix_fmt_out='yuv420p',output_params=['-crf','23','-movflags','+faststart'],macro_block_size=1); w.send(None)
  try:
   for i in ix:
@@ -61,12 +70,21 @@ def write_video(path,rows,grid,size):
     a=np.asarray(im.convert('RGB').resize((size,size),Image.BICUBIC),np.uint8); w.send(np.ascontiguousarray(a))
  finally: w.close()
 def convert(rawpath,out,ep,size):
- r=read(rawpath); missing=[x for x in TOPICS if not r[x]]
+ r=read(rawpath); required=['/joint_states','/left_arm/joint_trajectory','/right_arm/joint_trajectory','/left_arm/fk_pose','/right_arm/fk_pose','/robot_description',*CAMS.values()]
+ missing=[x for x in required if not r[x]]
  if missing: raise RuntimeError(f'episode {ep} missing {missing}')
+ for high,low in [('/left_arm/gripper/commanded_position','/left_gripper_controller/commands'),('/right_arm/gripper/commanded_position','/right_gripper_controller/commands')]:
+  if not r[high] and not r[low]: raise RuntimeError(f'episode {ep} missing both {high} and {low}')
  cam_start=max(r[x][0][0] for x in CAMS.values()); cam_end=min(r[x][-1][0] for x in CAMS.values())
  grid=np.arange(cam_start,cam_end,1/FPS);
  if len(grid)<51: raise RuntimeError(f'episode {ep} too short')
- jt,jv=stream(r['/joint_states'],joint_dict); lt,lv=traj(r['/left_arm/joint_trajectory']); rt,rv=traj(r['/right_arm/joint_trajectory']); lgt,lg=stream(r['/left_arm/gripper/commanded_position'],scalar); rgt,rg=stream(r['/right_arm/gripper/commanded_position'],scalar); et,ev=stream(r['/elevator/commanded_position'],scalar); lft,lf=stream(r['/left_arm/fk_pose'],p7); rft,rf=stream(r['/right_arm/fk_pose'],p7)
+ jt,jv=stream(r['/joint_states'],joint_dict); lt,lv=traj(r['/left_arm/joint_trajectory']); rt,rv=traj(r['/right_arm/joint_trajectory']); lrows=r['/left_arm/gripper/commanded_position'] or r['/left_gripper_controller/commands']; rrows=r['/right_arm/gripper/commanded_position'] or r['/right_gripper_controller/commands']; lgt,lg=stream(lrows,scalar); rgt,rg=stream(rrows,scalar); elevator_fallback=not r['/elevator/commanded_position']; lft,lf=stream(r['/left_arm/fk_pose'],p7); rft,rf=stream(r['/right_arm/fk_pose'],p7)
+ if elevator_fallback:
+  vt,vv=stream(r['/elevator/cmd_vel'],scalar)
+  carriage=np.asarray([x['carriage_joint'] for x in jv])
+  if not len(vv) or np.max(np.abs(vv))>1e-8 or np.ptp(carriage)>5e-4: raise RuntimeError(f'episode {ep} cannot infer stationary elevator: vmax={np.max(np.abs(vv)) if len(vv) else None}, range={np.ptp(carriage):.6f}')
+  et,ev=jt,carriage
+ else: et,ev=stream(r['/elevator/commanded_position'],scalar)
  ji=nearest(jt,grid); li=nearest(lt,grid); ri=nearest(rt,grid); lgi=nearest(lgt,grid); rgi=nearest(rgt,grid); ei=nearest(et,grid); lfi=nearest(lft,grid); rfi=nearest(rft,grid)
  urdf=r['/robot_description'][-1][1].data; model,pdata=make_pin(urdf)
  proprio=np.zeros((len(grid),14),np.float32); action=np.zeros((len(grid),ACTION_DIM),np.float32)
@@ -95,12 +113,17 @@ def convert(rawpath,out,ep,size):
   h.create_dataset('action',data=action); h.create_dataset('relative_action',data=action); h.create_dataset('action_dim_mask',data=np.ones(ACTION_DIM,np.float32))
  return {'episode':ep,'frames':len(grid),'duration_s':float(grid[-1]-grid[0]),'fk_median_m':med,'fk_p95_m':p95,'action_abs_p99':np.percentile(abs(action),99,axis=0).tolist()}
 def main():
- a=argparse.ArgumentParser(); a.add_argument('--raw-root',type=Path,required=True); a.add_argument('--mapping',type=Path,required=True); a.add_argument('--out',type=Path,required=True); a.add_argument('--image-size',type=int,default=256); a.add_argument('--overwrite',action='store_true'); z=a.parse_args()
+ a=argparse.ArgumentParser(); a.add_argument('--raw-root',type=Path,required=True); a.add_argument('--mapping',type=Path,required=True); a.add_argument('--out',type=Path,required=True); a.add_argument('--image-size',type=int,default=256); a.add_argument('--overwrite',action='store_true'); a.add_argument('--resume',action='store_true'); z=a.parse_args()
  if z.out.exists():
-  if not z.overwrite: raise FileExistsError(z.out)
-  shutil.rmtree(z.out)
- train=z.out/'train'; train.mkdir(parents=True); result=[]
+  if z.overwrite: shutil.rmtree(z.out)
+  elif not z.resume: raise FileExistsError(z.out)
+ train=z.out/'train'; train.mkdir(parents=True,exist_ok=True); result=[]
  for m in json.loads(z.mapping.read_text()):
-  ep=int(m['episode']); raw=z.raw_root/f'episode-{ep:03d}'/f"{m['name']}_0.mcap"; print(f'[{ep+1}/50] {raw.name}',flush=True); result.append(convert(raw,train,ep,z.image_size))
+  ep=int(m['episode']); existing=train/f'episode_{ep:03d}.hdf5'
+  videos=[train/f'episode_{ep:03d}_{c}.mp4' for c in CAMS]
+  if z.resume and existing.is_file() and all(x.is_file() for x in videos):
+   with h5py.File(existing,'r') as h: x=h['action'][:]; frames=len(x)
+   result.append({'episode':ep,'frames':frames,'duration_s':frames/FPS,'fk_median_m':None,'fk_p95_m':None,'action_abs_p99':np.percentile(abs(x),99,axis=0).tolist(),'resumed_prevalidated':True}); print(f'[{ep+1}/50] retained validated episode',flush=True); continue
+  raw=z.raw_root/f'episode-{ep:03d}'/f"{m['name']}_0.mcap"; print(f'[{ep+1}/50] {raw.name}',flush=True); result.append(convert(raw,train,ep,z.image_size))
  summary={'task':TASK,'fps':FPS,'action_dim':ACTION_DIM,'episodes':result,'total_frames':sum(x['frames'] for x in result)}; (z.out/'conversion_manifest.json').write_text(json.dumps(summary,indent=2)); print(json.dumps({'episodes':len(result),'total_frames':summary['total_frames']},indent=2))
 if __name__=='__main__': main()

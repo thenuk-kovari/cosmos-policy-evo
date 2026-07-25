@@ -29,5 +29,5 @@ def main():
  if TASK not in e or tuple(e[TASK].shape)!=(1,512,1024): raise RuntimeError('bad task embedding')
  manifest=json.loads((z.root/'conversion_manifest.json').read_text())
  if len(manifest['episodes'])!=50 or manifest['total_frames']!=frames: raise RuntimeError('manifest mismatch')
- max_fk=max(x['fk_p95_m'] for x in manifest['episodes']); print(json.dumps({'episodes':50,'frames':frames,'hours':frames/25/3600,'max_episode_fk_p95_m':max_fk},indent=2))
+ fk_values=[x['fk_p95_m'] for x in manifest['episodes'] if x['fk_p95_m'] is not None]; max_fk=max(fk_values) if fk_values else None; print(json.dumps({'episodes':50,'frames':frames,'hours':frames/25/3600,'max_episode_fk_p95_m':max_fk},indent=2))
 if __name__=='__main__': main()
