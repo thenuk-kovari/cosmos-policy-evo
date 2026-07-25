@@ -9,8 +9,15 @@ TRAIN_LOG="$OUTPUT/logs/umi-then-teleop-action-8k.log"
 PIPELINE_LOG="$OUTPUT/logs/umi-then-teleop-pipeline.log"
 log(){ printf '%s %s\n' "$(date --iso-8601=seconds)" "$*" | tee -a "$PIPELINE_LOG"; }
 log 'waiting for UMI action stage'
-while pgrep -f 'torchrun.*master_port=12443' >/dev/null; do sleep 30; done
-if ! grep -q 'Saved checkpoint to s3://policy-training/.*/iter_000010000' "$UMI_LOG"; then log 'ABORT UMI action stage lacks verified iter_000010000'; exit 1; fi
+until grep -q 'Saved checkpoint to s3://policy-training/.*/iter_000010000' "$UMI_LOG"; do
+  if ! pgrep -x pt_elastic >/dev/null; then
+    log 'ABORT UMI action process exited before verified iter_000010000'
+    exit 1
+  fi
+  sleep 30
+done
+log 'UMI checkpoint verified; waiting for its GPU workers to exit'
+while [[ -n "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | tr -d '[:space:]')" ]]; do sleep 10; done
 export AWS_ACCESS_KEY_ID="$(python3 -c 'import json;print(json.load(open("/home/thenuk-kovari/.secrets/cosmos_s3.json"))["aws_access_key_id"])')"
 export AWS_SECRET_ACCESS_KEY="$(python3 -c 'import json;print(json.load(open("/home/thenuk-kovari/.secrets/cosmos_s3.json"))["aws_secret_access_key"])')"
 S3_ENDPOINT="$(python3 -c 'import json;print(json.load(open("/home/thenuk-kovari/.secrets/cosmos_s3.json"))["endpoint_url"])')"

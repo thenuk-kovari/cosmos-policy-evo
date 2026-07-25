@@ -60,22 +60,33 @@ def write_video(path,rows,grid,size):
    with Image.open(io.BytesIO(b)) as im: im.verify()
    valid.append((t,b))
   except Exception: bad+=1
- if not valid or bad/max(1,len(rows))>0.02: raise RuntimeError(f'camera corruption too high for {path.name}: {bad}/{len(rows)}')
- if bad: print(f'WARNING {path.name}: substituting nearest valid frame for {bad}/{len(rows)} corrupt messages',flush=True)
+ if not valid: raise RuntimeError(f'camera has no decodable frames: {path.name}')
  t=np.array([x[0] for x in valid]); vals=[x[1] for x in valid]; ix=nearest(t,grid)
+ gaps=np.diff(t)
+ metrics={'messages':len(rows),'valid':len(valid),'corrupt':bad,
+          'max_valid_gap_s':float(gaps.max()) if len(gaps) else 0.,
+          'leading_fill_s':float(max(0.,t[0]-grid[0])),
+          'trailing_fill_s':float(max(0.,grid[-1]-t[-1]))}
+ if bad or metrics['max_valid_gap_s']>.5 or metrics['leading_fill_s']>.5 or metrics['trailing_fill_s']>.5:
+  print(f'WARNING {path.name}: nearest-valid resampling metrics={metrics}',flush=True)
  w=imageio_ffmpeg.write_frames(str(path),(size,size),fps=FPS,codec='libx264',pix_fmt_in='rgb24',pix_fmt_out='yuv420p',output_params=['-crf','23','-movflags','+faststart'],macro_block_size=1); w.send(None)
  try:
   for i in ix:
    with Image.open(io.BytesIO(vals[int(i)])) as im:
     a=np.asarray(im.convert('RGB').resize((size,size),Image.BICUBIC),np.uint8); w.send(np.ascontiguousarray(a))
  finally: w.close()
+ return metrics
 def convert(rawpath,out,ep,size):
  r=read(rawpath); required=['/joint_states','/left_arm/joint_trajectory','/right_arm/joint_trajectory','/left_arm/fk_pose','/right_arm/fk_pose','/robot_description',*CAMS.values()]
  missing=[x for x in required if not r[x]]
  if missing: raise RuntimeError(f'episode {ep} missing {missing}')
  for high,low in [('/left_arm/gripper/commanded_position','/left_gripper_controller/commands'),('/right_arm/gripper/commanded_position','/right_gripper_controller/commands')]:
   if not r[high] and not r[low]: raise RuntimeError(f'episode {ep} missing both {high} and {low}')
- cam_start=max(r[x][0][0] for x in CAMS.values()); cam_end=min(r[x][-1][0] for x in CAMS.values())
+ # Synchronize the complete sample to the ego camera. Wrist streams may start
+ # late, end early, or drop frames; nearest-valid resampling preserves the
+ # trajectory instead of silently truncating every modality.
+ ego=r[CAMS['cam_high']]
+ cam_start=ego[0][0]; cam_end=ego[-1][0]
  grid=np.arange(cam_start,cam_end,1/FPS);
  if len(grid)<51: raise RuntimeError(f'episode {ep} too short')
  jt,jv=stream(r['/joint_states'],joint_dict); lt,lv=traj(r['/left_arm/joint_trajectory']); rt,rv=traj(r['/right_arm/joint_trajectory']); lrows=r['/left_arm/gripper/commanded_position'] or r['/left_gripper_controller/commands']; rrows=r['/right_arm/gripper/commanded_position'] or r['/right_gripper_controller/commands']; lgt,lg=stream(lrows,scalar); rgt,rg=stream(rrows,scalar); elevator_fallback=not r['/elevator/commanded_position']; lft,lf=stream(r['/left_arm/fk_pose'],p7); rft,rf=stream(r['/right_arm/fk_pose'],p7)
@@ -104,14 +115,17 @@ def convert(rawpath,out,ep,size):
  if not np.isfinite(action).all() or not np.isfinite(proprio).all(): raise RuntimeError(f'episode {ep} nonfinite')
  med=float(np.median(fk_check)); p95=float(np.percentile(fk_check,95))
  if med>.005 or p95>.015: raise RuntimeError(f'episode {ep} FK check median={med:.4f} p95={p95:.4f}')
- stem=f'episode_{ep:03d}'; vids={}
- for name,topic in CAMS.items(): vids[name]=f'{stem}_{name}.mp4'; write_video(out/vids[name],r[topic],grid,size)
+ stem=f'episode_{ep:03d}'; vids={}; camera_metrics={}
+ for name,topic in CAMS.items():
+  vids[name]=f'{stem}_{name}.mp4'
+  camera_metrics[name]=write_video(out/vids[name],r[topic],grid,size)
  with h5py.File(out/f'{stem}.hdf5','w') as h:
   h.attrs.update(sim=False,success=True,task_description=TASK,fps=FPS,source_mcap=rawpath.name,action_layout='left_joint_delta7,left_gripper_delta,right_joint_delta7,right_gripper_delta,elevator_delta,left_ee_delta_xyz_rotvec6,right_ee_delta_xyz_rotvec6')
+  h.attrs['camera_resampling_metrics']=json.dumps(camera_metrics)
   o=h.create_group('observations'); o.create_dataset('qpos',data=proprio); o.create_dataset('qvel',data=np.gradient(proprio,1/FPS,axis=0)); o.create_dataset('effort',data=np.zeros_like(proprio)); vp=o.create_group('video_paths')
   for k,v in vids.items(): vp.create_dataset(k,data=v.encode())
   h.create_dataset('action',data=action); h.create_dataset('relative_action',data=action); h.create_dataset('action_dim_mask',data=np.ones(ACTION_DIM,np.float32))
- return {'episode':ep,'frames':len(grid),'duration_s':float(grid[-1]-grid[0]),'fk_median_m':med,'fk_p95_m':p95,'action_abs_p99':np.percentile(abs(action),99,axis=0).tolist()}
+ return {'episode':ep,'frames':len(grid),'duration_s':float(grid[-1]-grid[0]),'fk_median_m':med,'fk_p95_m':p95,'camera_resampling':camera_metrics,'action_abs_p99':np.percentile(abs(action),99,axis=0).tolist()}
 def main():
  a=argparse.ArgumentParser(); a.add_argument('--raw-root',type=Path,required=True); a.add_argument('--mapping',type=Path,required=True); a.add_argument('--out',type=Path,required=True); a.add_argument('--image-size',type=int,default=256); a.add_argument('--overwrite',action='store_true'); a.add_argument('--resume',action='store_true'); z=a.parse_args()
  if z.out.exists():
