@@ -23,15 +23,8 @@ class UMIALOHADataset(ALOHADataset):
         for episode in self.data.values():
             if episode["actions"].shape[1] != self.ACTION_DIM:
                 raise ValueError(f"Expected 29-D actions, got {episode['actions'].shape}")
-            if episode["proprio"].shape[1] != self.ACTION_DIM:
-                raise ValueError(f"Expected 29-D proprio, got {episode['proprio'].shape}")
+            if episode["proprio"].shape[1] != 14:
+                raise ValueError(f"Expected 14-D proprio, got {episode['proprio'].shape}")
 
     def __getitem__(self, idx):
-        sample = super().__getitem__(idx)
-        for key in ("actions", "next_action_chunk", "proprio", "future_proprio"):
-            sample[key] = np.asarray(sample[key], dtype=np.float32)
-        action_dim_mask = np.zeros(self.ACTION_DIM, dtype=np.float32)
-        action_dim_mask[self.EE_START :] = 1.0
-        sample["action_dim_mask"] = action_dim_mask
-        sample["proprio_dim_mask"] = action_dim_mask.copy()
-        return sample
+        return super().__getitem__(idx)

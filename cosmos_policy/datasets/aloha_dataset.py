@@ -267,6 +267,15 @@ class ALOHADataset(Dataset):
                 # Load actions and proprio (non-image data)
                 actions = f["action"][:]  # (episode_len, action_dim=14), float32
                 proprio = f["observations/qpos"][:]  # (episode_len, proprio_dim=14), float32
+                action_dim_mask = (
+                    f["action_dim_mask"][:].astype(np.float32)
+                    if "action_dim_mask" in f
+                    else np.ones(actions.shape[1], dtype=np.float32)
+                )
+                if action_dim_mask.ndim != 1 or action_dim_mask.shape[0] != actions.shape[1]:
+                    raise ValueError(f"{file}: action_dim_mask must have shape ({actions.shape[1]},)")
+                if not np.any(action_dim_mask) or not np.all(np.isin(action_dim_mask, (0.0, 1.0))):
+                    raise ValueError(f"{file}: action_dim_mask must be non-empty binary availability")
                 task_description = f.attrs.get("task_description")
                 if isinstance(task_description, bytes):
                     task_description = task_description.decode("utf-8")
@@ -343,6 +352,7 @@ class ALOHADataset(Dataset):
                     file_path=file,
                     proprio=proprio,
                     actions=actions,
+                    action_dim_mask=action_dim_mask,
                     command=command,
                     num_steps=num_steps,
                     returns=returns.copy() if self.return_value_function_returns else None,
@@ -420,6 +430,7 @@ class ALOHADataset(Dataset):
                     right_wrist_images=episode_data.get("right_wrist_images"),
                     proprio=episode_data["proprio"],
                     actions=episode_data["actions"],
+                    action_dim_mask=episode_data["action_dim_mask"],
                     command=episode_data["command"],
                     num_steps=episode_data["num_steps"],
                     is_lazy_video=episode_data.get("is_lazy_video", False),
@@ -608,6 +619,7 @@ class ALOHADataset(Dataset):
                         right_wrist_images=episode_data.get("right_wrist_images"),
                         proprio=episode_data["proprio"],
                         actions=episode_data["actions"],
+                        action_dim_mask=episode_data["action_dim_mask"],
                         command=episode_data["command"],
                         num_steps=int(episode_data["num_steps"]),
                         is_lazy_video=episode_data.get("is_lazy_video", False),
@@ -1052,6 +1064,7 @@ class ALOHADataset(Dataset):
             chunk_size=self.chunk_size,
             num_steps=episode_data["num_steps"],
         )
+        action_dim_mask = np.broadcast_to(episode_data["action_dim_mask"], action_chunk.shape).copy()
 
         t_prev = time.time()
 
@@ -1101,6 +1114,7 @@ class ALOHADataset(Dataset):
             "video": all_images,
             "command": episode_data["command"],
             "actions": action_chunk,
+            "action_dim_mask": action_dim_mask,
             "t5_text_embeddings": torch.squeeze(self.t5_text_embeddings[episode_data["command"]]),
             "t5_text_mask": torch.ones(512, dtype=torch.int64),
             "fps": 16,

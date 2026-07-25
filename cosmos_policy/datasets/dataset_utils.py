@@ -201,13 +201,16 @@ def rescale_data(data, dataset_stats, data_key, non_negative_only=False, scale_m
         curr_min = dataset_stats[f"{data_key}_min"]
         curr_max = dataset_stats[f"{data_key}_max"]
 
+        # Constant masked dimensions have zero span; preserve finite values.
+        denom = np.where(np.abs(curr_max - curr_min) < 1e-8, 1.0, curr_max - curr_min)
+
         # First, scale to [-1,+1] or [0,+1]:
         # - For [-1,+1]: x_new = 2 * ((x - curr_min) / (curr_max - curr_min)) - 1
         # - For [0,+1]: x_new = (x - curr_min) / (curr_max - curr_min)
         if not non_negative_only:  # [-1,+1]
-            rescaled_arr = 2 * ((arr - curr_min) / (curr_max - curr_min)) - 1
+            rescaled_arr = 2 * ((arr - curr_min) / denom) - 1
         else:  # [0,+1]
-            rescaled_arr = (arr - curr_min) / (curr_max - curr_min)
+            rescaled_arr = (arr - curr_min) / denom
 
         # Scale to [-scale_multiplier,+scale_multiplier] or [0,+scale_multiplier]
         rescaled_arr = scale_multiplier * rescaled_arr
@@ -239,12 +242,14 @@ def rescale_episode_data(episode_data, dataset_stats, data_key, non_negative_onl
     arr = episode_data[data_key]
     curr_min = dataset_stats[f"{data_key}_min"]
     curr_max = dataset_stats[f"{data_key}_max"]
+    denom = np.where(np.abs(curr_max - curr_min) < 1e-8, 1.0, curr_max - curr_min)
+
 
     # First, scale to [-1,+1] or [0,+1]:
     if not non_negative_only:  # [-1,+1]
-        rescaled_arr = 2 * ((arr - curr_min) / (curr_max - curr_min)) - 1
+        rescaled_arr = 2 * ((arr - curr_min) / denom) - 1
     else:  # [0,+1]
-        rescaled_arr = (arr - curr_min) / (curr_max - curr_min)
+        rescaled_arr = (arr - curr_min) / denom
 
     # Scale to [-scale_multiplier,+scale_multiplier] or [0,+scale_multiplier]
     rescaled_arr = scale_multiplier * rescaled_arr
