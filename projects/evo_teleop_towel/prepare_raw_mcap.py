@@ -60,7 +60,17 @@ def write_video(path,rows,grid,size):
    with Image.open(io.BytesIO(b)) as im: im.verify()
    valid.append((t,b))
   except Exception: bad+=1
- if not valid: raise RuntimeError(f'camera has no decodable frames: {path.name}')
+ if not rows:
+  metrics={'messages':0,'valid':0,'corrupt':0,'max_valid_gap_s':0.,
+           'leading_fill_s':0.,'trailing_fill_s':0.,'synthetic_black':True}
+  print(f'WARNING {path.name}: source stream absent; writing explicit black placeholder',flush=True)
+  w=imageio_ffmpeg.write_frames(str(path),(size,size),fps=FPS,codec='libx264',pix_fmt_in='rgb24',pix_fmt_out='yuv420p',output_params=['-crf','23','-movflags','+faststart'],macro_block_size=1); w.send(None)
+  try:
+   black=np.zeros((size,size,3),np.uint8)
+   for _ in grid: w.send(black)
+  finally: w.close()
+  return metrics
+ if not valid: raise RuntimeError(f'camera has messages but no decodable frames: {path.name}')
  t=np.array([x[0] for x in valid]); vals=[x[1] for x in valid]; ix=nearest(t,grid)
  gaps=np.diff(t)
  metrics={'messages':len(rows),'valid':len(valid),'corrupt':bad,
@@ -77,7 +87,7 @@ def write_video(path,rows,grid,size):
  finally: w.close()
  return metrics
 def convert(rawpath,out,ep,size):
- r=read(rawpath); required=['/joint_states','/left_arm/joint_trajectory','/right_arm/joint_trajectory','/left_arm/fk_pose','/right_arm/fk_pose','/robot_description',*CAMS.values()]
+ r=read(rawpath); required=['/joint_states','/left_arm/joint_trajectory','/right_arm/joint_trajectory','/left_arm/fk_pose','/right_arm/fk_pose','/robot_description',CAMS['cam_high']]
  missing=[x for x in required if not r[x]]
  if missing: raise RuntimeError(f'episode {ep} missing {missing}')
  for high,low in [('/left_arm/gripper/commanded_position','/left_gripper_controller/commands'),('/right_arm/gripper/commanded_position','/right_gripper_controller/commands')]:
