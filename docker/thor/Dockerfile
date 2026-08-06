@@ -30,20 +30,6 @@ RUN pip install --no-cache-dir --break-system-packages \
         transformer-engine-torch==2.16.0 \
     && rm -rf /root/.cache/pip
 
-# Torchvision contains a compiled C++ extension. Select the ARM64 wheel whose
-# published metadata exactly matches the base image's imported PyTorch ABI and
-# fail the build for any version that has not been validated here.
-RUN TORCH_VERSION="$(/usr/bin/python3 -c 'import torch; print(torch.__version__.split("+", 1)[0])')" \
-    && case "$TORCH_VERSION" in \
-         2.11.0) TORCHVISION_VERSION=0.26.0 ;; \
-         2.13.0) TORCHVISION_VERSION=0.28.0 ;; \
-         *) echo "Unsupported base-image Torch version: $TORCH_VERSION" >&2; exit 1 ;; \
-       esac \
-    && pip install --no-cache-dir --break-system-packages --no-deps \
-         "torchvision==${TORCHVISION_VERSION}" \
-    && /usr/bin/python3 -c 'import torch, torchvision; assert hasattr(torch.ops.torchvision, "nms")' \
-    && rm -rf /root/.cache/pip
-
 RUN pip install --no-cache-dir --break-system-packages \
         fastapi==0.121.2 \
         nvdlfw-inspect==0.2.2 \
@@ -53,10 +39,25 @@ RUN pip install --no-cache-dir --break-system-packages \
         uvicorn==0.51.0 \
     && rm -rf /root/.cache/pip
 
+# Select torchvision only after all dependency-resolving installs, using the
+# actually imported vendor Torch ABI rather than potentially stale metadata.
+RUN TORCH_VERSION="$(/usr/bin/python3 -c 'import torch; print(torch.__version__.split("+", 1)[0])')" \
+    && case "$TORCH_VERSION" in \
+         2.11.0) TORCHVISION_VERSION=0.26.0 ;; \
+         2.13.0) TORCHVISION_VERSION=0.28.0 ;; \
+         *) echo "Unsupported final Torch version: $TORCH_VERSION" >&2; exit 1 ;; \
+       esac \
+    && pip install --no-cache-dir --break-system-packages --no-deps --force-reinstall \
+         "torchvision==${TORCHVISION_VERSION}" \
+    && /usr/bin/python3 -c 'import torch, torchvision; assert hasattr(torch.ops.torchvision, "nms")' \
+    && rm -rf /root/.cache/pip
+
 COPY . /opt/cosmos-policy
 RUN pip install --no-cache-dir --break-system-packages --no-deps /opt/cosmos-policy \
     && find /opt/cosmos-policy -type d -name __pycache__ -prune -exec rm -rf '{}' + \
-    && rm -rf /root/.cache/pip
+    && rm -rf /root/.cache/pip \
+    && /usr/bin/python3 -c 'import torch, torchvision; assert hasattr(torch.ops.torchvision, "nms")' \
+    && /usr/bin/python3 -c 'import torch; torch.compile=lambda fn=None,*a,**k: fn if fn is not None else (lambda f:f); from cosmos_policy.experiments.robot.cosmos_utils import get_action, get_model'
 
 COPY deploy/triton/backends/cosmos_policy_backend.py /opt/triton/backends/cosmos_policy_backend.py
 COPY deploy/triton/model_repository/slot_b/ /models/slot_b/
