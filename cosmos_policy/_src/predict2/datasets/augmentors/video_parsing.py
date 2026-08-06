@@ -17,7 +17,10 @@ import io
 import random
 from typing import Optional
 
-import decord
+try:
+    import decord
+except ImportError:
+    decord = None
 import numpy as np
 import torch
 from einops import rearrange

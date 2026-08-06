@@ -1,0 +1,57 @@
+ARG TRITON_IMAGE=815254799754.dkr.ecr.us-west-2.amazonaws.com/evo/dev/triton-inference-server:latest
+FROM ${TRITON_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=5 \
+    NVTE_FRAMEWORK=pytorch \
+    COSMOS_POLICY_SKIP_CONFIG_CHECKPOINT_DOWNLOAD=1 \
+    PYTHONPATH=/opt/cosmos-policy:/opt/triton:${PYTHONPATH}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ffmpeg \
+        libegl1 \
+        libgl1 \
+        libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/thor/requirements-runtime.txt /tmp/cosmos-runtime-requirements.txt
+RUN pip install --no-cache-dir --break-system-packages \
+        -r /tmp/cosmos-runtime-requirements.txt \
+    && pip install --no-cache-dir --break-system-packages --no-deps \
+        megatron-core==0.14.0 \
+    && rm -rf /root/.cache/pip /tmp/cosmos-runtime-requirements.txt
+
+RUN pip install --no-cache-dir --break-system-packages \
+        transformer-engine==2.16.0 transformer-engine-cu13==2.16.0 \
+    && pip install --no-cache-dir --break-system-packages --no-build-isolation --no-deps \
+        transformer-engine-torch==2.16.0 \
+    && rm -rf /root/.cache/pip
+
+RUN pip install --no-cache-dir --break-system-packages \
+        fastapi==0.121.2 \
+        nvdlfw-inspect==0.2.2 \
+        onnx==1.20.0 onnx-ir==0.1.12 onnxscript==0.5.6 \
+        triton==3.7.1 \
+        pytz==2025.2 \
+        uvicorn==0.51.0 \
+    && rm -rf /root/.cache/pip
+
+COPY . /opt/cosmos-policy
+RUN pip install --no-cache-dir --break-system-packages --no-deps /opt/cosmos-policy \
+    && find /opt/cosmos-policy -type d -name __pycache__ -prune -exec rm -rf '{}' + \
+    && rm -rf /root/.cache/pip
+
+COPY deploy/triton/backends/cosmos_policy_backend.py /opt/triton/backends/cosmos_policy_backend.py
+COPY deploy/triton/model_repository/slot_b/ /models/slot_b/
+
+ARG SOURCE_REVISION=uncommitted
+
+LABEL org.opencontainers.image.source="https://github.com/thenuk-kovari/video-policy-handoff" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      ai.kovari.policy.training-baseline="16c36a2977584e14df719c4980646a43978bdcf8" \
+      ai.kovari.policy.action-dim="29" \
+      ai.kovari.policy.proprio-dim="14" \
+      ai.kovari.policy.chunk-size="50"

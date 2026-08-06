@@ -29,6 +29,7 @@ from cosmos_policy._src.imaginaire.utils.config_helper import get_config_module,
 from cosmos_policy._src.imaginaire.utils.easy_io import easy_io
 from cosmos_policy._src.imaginaire.utils.fsdp_helper import hsdp_device_mesh
 from cosmos_policy._src.predict2.checkpointer.dcp import (
+    FileSystemReader,
     DefaultLoadPlanner,
     DistributedCheckpointer,
     ModelWrapper,
@@ -215,7 +216,7 @@ def load_model_state_dict_from_checkpoint(
 
     from cosmos_policy._src.imaginaire.utils.checkpoint_db import get_checkpoint_path
 
-    load_from_local = True
+    load_from_local = checkpoint_format == "pt"
     local_s3_ckpt_fp = get_checkpoint_path(cur_key_ckpt_full_path)
 
     if SMOKE:
@@ -287,15 +288,17 @@ def load_model_state_dict_from_checkpoint(
     else:
         log.info(f"Loading model from s3 {s3_checkpoint_dir}")
 
-        checkpointer = DistributedCheckpointer(config.checkpoint, config.job, callbacks=None, disable_async=True)
-
         _model_wrapper = ModelWrapper(
             model,
             load_ema_to_reg=load_ema_to_reg if checkpoint_format == "dcp" else False,
         )
         _state_dict = _model_wrapper.state_dict()
         if checkpoint_format == "dcp":
-            storage_reader = checkpointer.get_storage_reader(cur_key_ckpt_full_path)
+            if str(cur_key_ckpt_full_path).startswith("s3:"):
+                checkpointer = DistributedCheckpointer(config.checkpoint, config.job, callbacks=None, disable_async=True)
+                storage_reader = checkpointer.get_storage_reader(cur_key_ckpt_full_path)
+            else:
+                storage_reader = FileSystemReader(cur_key_ckpt_full_path)
             load_planner = DefaultLoadPlanner(allow_partial_load=True)
             dcp_load_state_dict(_state_dict, storage_reader, load_planner)
             _model_wrapper.load_state_dict(_state_dict)

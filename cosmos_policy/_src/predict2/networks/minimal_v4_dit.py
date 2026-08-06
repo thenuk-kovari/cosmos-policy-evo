@@ -529,8 +529,8 @@ class Attention(nn.Module):
                 if self.use_wan_fp32_strategy:  # wan will force q and k to fp32 before rotary pos emb
                     q = q.to(torch.float32)
                     k = k.to(torch.float32)
-                q = apply_rotary_pos_emb(q, rope_emb, tensor_format=self.qkv_format, fused=True)
-                k = apply_rotary_pos_emb(k, rope_emb, tensor_format=self.qkv_format, fused=True)
+                q = apply_rotary_pos_emb(q, rope_emb, tensor_format=self.qkv_format, fused=False)
+                k = apply_rotary_pos_emb(k, rope_emb, tensor_format=self.qkv_format, fused=False)
                 if self.use_wan_fp32_strategy:
                     q = q.to(original_dtype)
                     k = k.to(original_dtype)

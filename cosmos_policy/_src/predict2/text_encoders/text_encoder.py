@@ -27,7 +27,19 @@ from cosmos_policy._src.imaginaire.utils.embedding_concat_strategy import (
     EmbeddingConcatStrategy as EmbeddingConcatStrategy,
 )
 from cosmos_policy._src.predict2.models.utils import load_state_dict, load_state_dict_from_folder
-from cosmos_policy._src.predict2.text_encoders.reason1 import QwenVLBaseModel
+try:
+    from cosmos_policy._src.predict2.text_encoders.reason1 import QwenVLBaseModel
+except (ImportError, AssertionError) as reason1_import_error:
+    _reason1_import_error = reason1_import_error
+    # Reason1 is an optional online text encoder. Robot-policy inference uses
+    # precomputed T5 embeddings, but the global config graph imports this module
+    # eagerly. Keep that graph importable on platforms without FlashAttention
+    # (notably Jetson/ARM64) and fail only if Reason1 is actually instantiated.
+    class QwenVLBaseModel:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "Reason1 text encoding is unavailable because its optional dependencies failed to import"
+            ) from _reason1_import_error
 from cosmos_policy._src.reason1.configs.default.model_config_qwen import QwenModelConfig, QwenVisionConfig
 from cosmos_policy._src.reason1.tokenizer.processor import build_tokenizer
 

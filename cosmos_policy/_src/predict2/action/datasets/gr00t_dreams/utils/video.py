@@ -14,7 +14,10 @@
 # limitations under the License.
 import av
 import cv2
-import decord  # noqa: F401
+try:
+    import decord
+except ImportError:
+    decord = None
 import numpy as np
 
 import torch  # noqa: F401 # isort: skip

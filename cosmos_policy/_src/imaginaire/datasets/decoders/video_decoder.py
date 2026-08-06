@@ -19,7 +19,10 @@ import re
 from random import randint
 from typing import Callable, List, Tuple
 
-import decord
+try:
+    import decord
+except ImportError:
+    decord = None
 import numpy as np
 import torch
 from PIL import Image

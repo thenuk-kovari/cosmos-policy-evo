@@ -1,0 +1,67 @@
+name: "slot_b"
+backend: "python"
+max_batch_size: 0
+
+input [
+  {
+    name: "observation__state"
+    data_type: TYPE_FP32
+    dims: [14]
+  },
+  {
+    name: "observation__images__base"
+    data_type: TYPE_FP32
+    dims: [3, -1, -1]
+  },
+  {
+    name: "observation__images__left_gripper"
+    data_type: TYPE_FP32
+    dims: [3, -1, -1]
+  },
+  {
+    name: "observation__images__right_gripper"
+    data_type: TYPE_FP32
+    dims: [3, -1, -1]
+  },
+  {
+    name: "reset"
+    data_type: TYPE_BOOL
+    dims: [1]
+    optional: true
+  }
+]
+
+output [
+  {
+    name: "action"
+    data_type: TYPE_FP32
+    dims: [50, 29]
+  }
+]
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+    gpus: [0]
+  }
+]
+
+parameters [
+  {
+    key: "CHECKPOINT_PATH"
+    value: { string_value: "/models/slot_b/checkpoint" }
+  },
+  {
+    key: "EXPERIMENT"
+    value: { string_value: "predict2-2b-48demos-umi-ee12-8k" }
+  },
+  {
+    key: "TASK_DESCRIPTION"
+    value: { string_value: "fold the large blue towel twice" }
+  },
+  {
+    key: "DENOISING_STEPS"
+    value: { string_value: "10" }
+  }
+]
