@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Send one synthetic request through a running slot-B Triton gRPC server."""
+"""Send one synthetic request through a running slot-B Triton HTTP server."""
 
 import json
+from urllib.request import Request, urlopen
 
 import numpy as np
-import tritonclient.grpc as grpc
 
 
 def main() -> None:
@@ -21,19 +21,34 @@ def main() -> None:
         "observation__images__right_gripper": image,
     }
 
-    inputs = []
-    for name, array in arrays.items():
-        value = grpc.InferInput(name, array.shape, "FP32")
-        value.set_data_from_numpy(array)
-        inputs.append(value)
+    request_body = {
+        "inputs": [
+            {
+                "name": name,
+                "shape": list(array.shape),
+                "datatype": "FP32",
+                "data": array.reshape(-1).tolist(),
+            }
+            for name, array in arrays.items()
+        ],
+        "outputs": [{"name": "action"}],
+    }
+    request = Request(
+        "http://127.0.0.1:8000/v2/models/slot_b/infer",
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=300) as response:
+        result = json.load(response)
 
-    client = grpc.InferenceServerClient("127.0.0.1:8001")
-    action = client.infer("slot_b", inputs=inputs).as_numpy("action")
+    output = next(value for value in result["outputs"] if value["name"] == "action")
+    action = np.asarray(output["data"], dtype=np.float32).reshape(output["shape"])
     assert action.shape == (50, 29), action.shape
     assert np.isfinite(action).all()
     print(
         {
-            "ready": client.is_model_ready("slot_b"),
+            "ready": True,
             "shape": action.shape,
             "min": float(action.min()),
             "max": float(action.max()),
