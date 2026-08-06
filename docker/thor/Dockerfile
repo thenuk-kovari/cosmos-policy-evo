@@ -24,10 +24,13 @@ RUN pip install --no-cache-dir --break-system-packages \
         megatron-core==0.14.0 \
     && rm -rf /root/.cache/pip /tmp/cosmos-runtime-requirements.txt
 
+# Transformer Engine 2.13+ requires a cuBLASLt symbol introduced after the
+# CUDA 13.0 libraries deployed on some Thor Evo images. Version 2.12 retains
+# the required RMSNorm, attention, and rotary APIs without that newer ABI.
 RUN pip install --no-cache-dir --break-system-packages \
-        transformer-engine==2.16.0 transformer-engine-cu13==2.16.0 \
+        transformer-engine==2.12.0 transformer-engine-cu13==2.12.0 \
     && pip install --no-cache-dir --break-system-packages --no-build-isolation --no-deps \
-        transformer-engine-torch==2.16.0 \
+        transformer-engine-torch==2.12.0 \
     && rm -rf /root/.cache/pip
 
 RUN pip install --no-cache-dir --break-system-packages \
