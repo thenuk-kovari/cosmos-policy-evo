@@ -1,4 +1,4 @@
-ARG TRITON_IMAGE=815254799754.dkr.ecr.us-west-2.amazonaws.com/evo/dev/triton-inference-server:latest
+ARG TRITON_IMAGE=815254799754.dkr.ecr.us-west-2.amazonaws.com/evo/dev/triton-inference-server:latest@sha256:be28f0cd51b0ca3d363ddfdde08a07dcfb366476a9103678ebe4146d22bb558f
 FROM ${TRITON_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -28,6 +28,20 @@ RUN pip install --no-cache-dir --break-system-packages \
         transformer-engine==2.16.0 transformer-engine-cu13==2.16.0 \
     && pip install --no-cache-dir --break-system-packages --no-build-isolation --no-deps \
         transformer-engine-torch==2.16.0 \
+    && rm -rf /root/.cache/pip
+
+# Torchvision contains a compiled C++ extension. Select the ARM64 wheel whose
+# published metadata exactly matches the base image's imported PyTorch ABI and
+# fail the build for any version that has not been validated here.
+RUN TORCH_VERSION="$(/usr/bin/python3 -c 'import torch; print(torch.__version__.split("+", 1)[0])')" \
+    && case "$TORCH_VERSION" in \
+         2.11.0) TORCHVISION_VERSION=0.26.0 ;; \
+         2.13.0) TORCHVISION_VERSION=0.28.0 ;; \
+         *) echo "Unsupported base-image Torch version: $TORCH_VERSION" >&2; exit 1 ;; \
+       esac \
+    && pip install --no-cache-dir --break-system-packages --no-deps \
+         "torchvision==${TORCHVISION_VERSION}" \
+    && /usr/bin/python3 -c 'import torch, torchvision; assert hasattr(torch.ops.torchvision, "nms")' \
     && rm -rf /root/.cache/pip
 
 RUN pip install --no-cache-dir --break-system-packages \
