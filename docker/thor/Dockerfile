@@ -29,8 +29,6 @@ RUN pip install --no-cache-dir --break-system-packages \
 # the required RMSNorm, attention, and rotary APIs without that newer ABI.
 RUN pip install --no-cache-dir --break-system-packages \
         transformer-engine==2.12.0 transformer-engine-cu13==2.12.0 \
-    && pip install --no-cache-dir --break-system-packages --no-build-isolation --no-deps \
-        transformer-engine-torch==2.12.0 \
     && rm -rf /root/.cache/pip
 
 RUN pip install --no-cache-dir --break-system-packages \
@@ -53,6 +51,12 @@ RUN TORCH_VERSION="$(/usr/bin/python3 -c 'import torch; print(torch.__version__.
     && pip install --no-cache-dir --break-system-packages --no-deps --force-reinstall \
          "torchvision==${TORCHVISION_VERSION}" \
     && /usr/bin/python3 -c 'import torch, torchvision; assert hasattr(torch.ops.torchvision, "nms")' \
+    && rm -rf /root/.cache/pip
+
+# Build the framework extension only after the final Torch ABI is established;
+# later compilation would otherwise leave unresolved c10 symbols at runtime.
+RUN pip install --no-cache-dir --break-system-packages --no-build-isolation --no-deps \
+        transformer-engine-torch==2.12.0 \
     && rm -rf /root/.cache/pip
 
 COPY . /opt/cosmos-policy
