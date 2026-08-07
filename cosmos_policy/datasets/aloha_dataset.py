@@ -702,6 +702,20 @@ class ALOHADataset(Dataset):
             return self.epoch_length
         return self.num_steps
 
+    def _get_action_chunk(self, episode_data: dict, relative_step_idx: int) -> np.ndarray:
+        """Build an action chunk for one sample.
+
+        Subclasses may override this when an action is defined relative to the
+        sample's observation-time state and therefore cannot be represented by
+        slicing a single per-frame action array.
+        """
+        return get_action_chunk_with_padding(
+            actions=episode_data["actions"],
+            relative_step_idx=relative_step_idx,
+            chunk_size=self.chunk_size,
+            num_steps=episode_data["num_steps"],
+        )
+
     def __getitem__(self, idx):
         """
         Fetches images and action chunk sample by index.
@@ -1058,12 +1072,7 @@ class ALOHADataset(Dataset):
         t_prev = time.time()
 
         # Calculate how many actions we can get from the current index
-        action_chunk = get_action_chunk_with_padding(
-            actions=episode_data["actions"],
-            relative_step_idx=relative_step_idx,
-            chunk_size=self.chunk_size,
-            num_steps=episode_data["num_steps"],
-        )
+        action_chunk = self._get_action_chunk(episode_data, relative_step_idx)
         action_dim_mask = np.broadcast_to(episode_data["action_dim_mask"], action_chunk.shape).copy()
 
         t_prev = time.time()
@@ -1081,12 +1090,7 @@ class ALOHADataset(Dataset):
 
         # Calculate and return the next action chunk as well
         next_relative_step_idx = min(relative_step_idx + self.chunk_size, episode_data["num_steps"] - 1)
-        next_action_chunk = get_action_chunk_with_padding(
-            actions=episode_data["actions"],
-            relative_step_idx=next_relative_step_idx,
-            chunk_size=self.chunk_size,
-            num_steps=episode_data["num_steps"],
-        )
+        next_action_chunk = self._get_action_chunk(episode_data, next_relative_step_idx)
 
         # Calculate next future frame index if needed
         next_future_frame_idx = next_relative_step_idx + self.chunk_size

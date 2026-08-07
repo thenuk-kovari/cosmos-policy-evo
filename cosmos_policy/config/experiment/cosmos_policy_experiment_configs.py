@@ -24,6 +24,9 @@ from cosmos_policy._src.imaginaire.utils import log
 from cosmos_policy._src.imaginaire.utils.checkpoint_db import get_checkpoint_path  # noqa: F401
 from cosmos_policy.datasets.aloha_dataset import ALOHADataset
 from cosmos_policy.datasets.umi_aloha_dataset import UMIALOHADataset
+from cosmos_policy.config.experiment.evo_q0_config import (
+    cosmos_predict2_2b_480p_evo_q0_state17,
+)
 from cosmos_policy.datasets.libero_dataset import LIBERODataset
 from cosmos_policy.datasets.robocasa_dataset import RoboCasaDataset
 from cosmos_policy.models.policy_video2world_model import CosmosPolicyVideo2WorldModel
@@ -646,6 +649,7 @@ def register_configs():
         cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbowl45_candyinbag45_eggplantchickenonplate80__resumeFrom50K_648_rollouts_Vsprime_value_func__inference_only,
         cosmos_predict2_2b_480p_aloha_yam_fold_blue_towel_twice,
         cosmos_predict2_2b_480p_umi_large_blue_towel_ee12,
+        cosmos_predict2_2b_480p_evo_q0_state17,
     ]:
         experiment_name = _item["job"]["name"]
         log.info(f"Registering experiment: {experiment_name}")

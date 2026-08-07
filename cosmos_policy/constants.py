@@ -49,6 +49,12 @@ UMI_CONSTANTS = {
     "PROPRIO_DIM": 14,
 }
 
+EVO_Q0_CONSTANTS = {
+    "NUM_ACTIONS_CHUNK": 50,
+    "ACTION_DIM": 17,
+    "PROPRIO_DIM": 17,
+}
+
 
 # Function to detect robot platform from command line arguments
 def detect_robot_platform():
@@ -58,6 +64,8 @@ def detect_robot_platform():
         return "LIBERO"
     elif "robocasa" in cmd_args:
         return "ROBOCASA"
+    elif "evo-q0" in cmd_args or "evo_q0" in cmd_args:
+        return "EVO_Q0"
     elif "umi" in cmd_args or "evo" in cmd_args:
         return "UMI"
     elif "aloha" in cmd_args:
@@ -79,6 +87,8 @@ elif ROBOT_PLATFORM == "ALOHA":
     constants = ALOHA_CONSTANTS
 elif ROBOT_PLATFORM == "UMI":
     constants = UMI_CONSTANTS
+elif ROBOT_PLATFORM == "EVO_Q0":
+    constants = EVO_Q0_CONSTANTS
 
 # Assign constants to global variables
 NUM_ACTIONS_CHUNK = constants["NUM_ACTIONS_CHUNK"]
