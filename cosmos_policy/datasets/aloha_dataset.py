@@ -32,6 +32,12 @@ from PIL import Image
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
+try:
+    from decord import VideoReader, cpu
+except ImportError:  # OpenCV remains the portable fallback.
+    VideoReader = None
+    cpu = None
+
 from cosmos_policy.datasets.dataset_common import (
     build_demo_step_index_mapping,
     build_rollout_step_index_mapping,
@@ -106,24 +112,31 @@ def get_video_num_frames(video_path):
 
 def load_video_frames(video_path, frame_indices, resize_size: int = None):
     """Decode only the requested MP4 frames, preserving input order."""
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise ValueError(f"Could not open video file: {video_path}")
-    frames = []
-    try:
-        for frame_index in frame_indices:
-            frame_index = int(frame_index)
-            if frame_index < 0:
-                raise ValueError(f"Invalid negative frame index {frame_index} for {video_path}")
-            if not cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index):
-                raise ValueError(f"Could not seek to frame {frame_index} in {video_path}")
-            ret, frame_bgr = cap.read()
-            if not ret:
-                raise ValueError(f"Could not decode frame {frame_index} in {video_path}")
-            frames.append(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
-    finally:
-        cap.release()
-    result = np.asarray(frames, dtype=np.uint8)
+    frame_indices = [int(frame_index) for frame_index in frame_indices]
+    if any(frame_index < 0 for frame_index in frame_indices):
+        raise ValueError(f"Invalid negative frame index in {frame_indices} for {video_path}")
+    if VideoReader is not None:
+        reader = VideoReader(video_path, ctx=cpu(0), num_threads=1)
+        try:
+            result = reader.get_batch(frame_indices).asnumpy().astype(np.uint8, copy=False)
+        except Exception as error:
+            raise ValueError(f"Could not decode frames {frame_indices} in {video_path}") from error
+    else:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video file: {video_path}")
+        frames = []
+        try:
+            for frame_index in frame_indices:
+                if not cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index):
+                    raise ValueError(f"Could not seek to frame {frame_index} in {video_path}")
+                ret, frame_bgr = cap.read()
+                if not ret:
+                    raise ValueError(f"Could not decode frame {frame_index} in {video_path}")
+                frames.append(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+        finally:
+            cap.release()
+        result = np.asarray(frames, dtype=np.uint8)
     if resize_size is not None:
         result = resize_images(result, resize_size)
     return result
