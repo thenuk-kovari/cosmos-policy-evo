@@ -33,12 +33,16 @@ evo_q0_towel_dataset = L(EVOQ0AnchoredDataset)(
     num_duplicates_per_image=4,
     lazy_video_decompression=True,
     # The same episodes serve two objectives. Demo samples are action-only;
-    # duplicated success-rollout samples are future-state-only. No value
-    # samples are created, so the effective split is exactly 75% / 25%.
+    # duplicated success-rollout samples are future-state-only, giving the
+    # effective 75% / 25% split below. Predict2's tokenizer contract still
+    # requires the final value segment to make a 41-frame sequence, but
+    # p_world_model=1.0 prevents value samples and the model loss mask below
+    # gives the structural value segment zero loss.
     treat_demos_as_success_rollouts=True,
     demonstration_sampling_prob=0.75,
     success_rollout_sampling_prob=1.0,
-    return_value_function_returns=False,
+    return_value_function_returns=True,
+    p_world_model=1.0,
 )
 
 cosmos_predict2_2b_480p_evo_q0_state17 = LazyDict(
