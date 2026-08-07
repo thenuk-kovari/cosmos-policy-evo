@@ -8,6 +8,7 @@ MAX_STEPS="${MAX_STEPS:-8000}"
 SAVE_EVERY="${SAVE_EVERY:-500}"
 JOB_NAME="${JOB_NAME:-evo-q0-state17-${MAX_STEPS}}"
 MASTER_PORT="${MASTER_PORT:-12446}"
+UV="${UV:-/home/ubuntu/.local/bin/uv}"
 
 args=(
   --config=cosmos_policy/config/config.py
@@ -29,6 +30,6 @@ if [[ -n "${LOAD_PATH:-}" ]]; then
   )
 fi
 
-exec uv run --extra cu128 --group aloha --python 3.10 \
+exec "${UV}" run --extra cu128 --group aloha --python 3.10 \
   torchrun --nproc_per_node=8 --master_port="${MASTER_PORT}" \
   -m cosmos_policy.scripts.train "${args[@]}"
