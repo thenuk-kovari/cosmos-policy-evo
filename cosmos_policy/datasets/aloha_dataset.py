@@ -104,6 +104,31 @@ def get_video_num_frames(video_path):
     return frame_count
 
 
+def load_video_frames(video_path, frame_indices, resize_size: int = None):
+    """Decode only the requested MP4 frames, preserving input order."""
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Could not open video file: {video_path}")
+    frames = []
+    try:
+        for frame_index in frame_indices:
+            frame_index = int(frame_index)
+            if frame_index < 0:
+                raise ValueError(f"Invalid negative frame index {frame_index} for {video_path}")
+            if not cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index):
+                raise ValueError(f"Could not seek to frame {frame_index} in {video_path}")
+            ret, frame_bgr = cap.read()
+            if not ret:
+                raise ValueError(f"Could not decode frame {frame_index} in {video_path}")
+            frames.append(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+    finally:
+        cap.release()
+    result = np.asarray(frames, dtype=np.uint8)
+    if resize_size is not None:
+        result = resize_images(result, resize_size)
+    return result
+
+
 def get_history_indices(curr_step_index: int, num_history_indices: int, spacing_factor: int) -> tuple:
     """
     Computes the step indices corresponding to the history, given the current step index.
@@ -154,6 +179,7 @@ class ALOHADataset(Dataset):
         p_world_model: float = 0.5,
         gamma: float = 0.998,
         lazy_video_decompression: bool = False,
+        lazy_video_frame_access: bool = False,
         rollout_data_dir: str = "",
         demonstration_sampling_prob: float = 0.5,
         success_rollout_sampling_prob: float = 0.5,
@@ -217,6 +243,9 @@ class ALOHADataset(Dataset):
         self.p_world_model = p_world_model
         self.gamma = gamma
         self.lazy_video_decompression = lazy_video_decompression
+        if lazy_video_frame_access and not lazy_video_decompression:
+            raise ValueError("lazy_video_frame_access requires lazy_video_decompression=True")
+        self.lazy_video_frame_access = lazy_video_frame_access
         self.rollout_data_dir = rollout_data_dir
         self.demonstration_sampling_prob = demonstration_sampling_prob
         self.success_rollout_sampling_prob = success_rollout_sampling_prob
@@ -363,6 +392,7 @@ class ALOHADataset(Dataset):
                     if self.lazy_video_decompression:
                         episode_entry["video_paths"] = video_paths
                         episode_entry["is_lazy_video"] = True
+                        episode_entry["is_lazy_video_frame_access"] = self.lazy_video_frame_access
                     else:
                         episode_entry["images"] = images
                         episode_entry["left_wrist_images"] = left_wrist_images
@@ -434,6 +464,7 @@ class ALOHADataset(Dataset):
                     command=episode_data["command"],
                     num_steps=episode_data["num_steps"],
                     is_lazy_video=episode_data.get("is_lazy_video", False),
+                    is_lazy_video_frame_access=episode_data.get("is_lazy_video_frame_access", False),
                     success=True,
                 )
                 if self.return_value_function_returns:
@@ -801,8 +832,12 @@ class ALOHADataset(Dataset):
                 is_value_function_sample = False
 
         # Lazy-load videos for this episode if needed (demos or rollouts)
-        if episode_data.get("is_lazy_video", False) and (
+        if (
+            episode_data.get("is_lazy_video", False)
+            and not episode_data.get("is_lazy_video_frame_access", False)
+            and (
             ("images" not in episode_data) or (episode_data["images"] is None)
+            )
         ):
             video_paths = episode_data["video_paths"]
             images = load_video_as_images(video_paths["cam_high"], resize_size=self.final_image_size)  # uint8
@@ -832,6 +867,18 @@ class ALOHADataset(Dataset):
         primary_future = None
         left_future = None
         right_future = None
+        if episode_data.get("is_lazy_video_frame_access", False):
+            video_paths = episode_data["video_paths"]
+            requested_indices = (relative_step_idx, future_frame_idx)
+            primary_current, primary_future = load_video_frames(
+                video_paths["cam_high"], requested_indices, resize_size=self.final_image_size
+            )
+            left_current, left_future = load_video_frames(
+                video_paths["cam_left_wrist"], requested_indices, resize_size=self.final_image_size
+            )
+            right_current, right_future = load_video_frames(
+                video_paths["cam_right_wrist"], requested_indices, resize_size=self.final_image_size
+            )
         if episode_data.get("is_lazy_jpeg", False):
             jpeg_file = episode_data["jpeg_file_path"]
             primary_key = episode_data.get("jpeg_primary_key")
@@ -872,6 +919,10 @@ class ALOHADataset(Dataset):
             left_future = _ensure_size(left_future)
             right_future = _ensure_size(right_future)
 
+        use_local_frames = episode_data.get("is_lazy_jpeg", False) or episode_data.get(
+            "is_lazy_video_frame_access", False
+        )
+
         # Build a list of unique frames (no per-frame duplication) and per-frame repeat counts
         # We'll preprocess the unique frames once (same aug params across the whole sequence),
         # then expand by repeat counts to produce the final sequence.
@@ -895,7 +946,7 @@ class ALOHADataset(Dataset):
 
         # Add blank first input image (needed for the tokenizer)
         ref_image_for_shape = (
-            primary_current if episode_data.get("is_lazy_jpeg", False) else episode_data["images"][relative_step_idx]
+            primary_current if use_local_frames else episode_data["images"][relative_step_idx]
         )
         blank_first_input_frame = np.zeros_like(ref_image_for_shape)
         frames.append(blank_first_input_frame)
@@ -908,14 +959,14 @@ class ALOHADataset(Dataset):
             proprio = episode_data["proprio"][relative_step_idx]
             image = (
                 primary_current
-                if episode_data.get("is_lazy_jpeg", False)
+                if use_local_frames
                 else episode_data["images"][relative_step_idx]
             )
             # Proprio values will be injected into latent diffusion sequence later
             # For now just add blank image
             blank_proprio_image = np.zeros_like(
                 primary_current
-                if episode_data.get("is_lazy_jpeg", False)
+                if use_local_frames
                 else episode_data["images"][relative_step_idx]
             )
             current_proprio_latent_idx = segment_idx
@@ -927,7 +978,7 @@ class ALOHADataset(Dataset):
         # Add current left wrist image
         left_wrist_image = (
             left_current
-            if episode_data.get("is_lazy_jpeg", False)
+            if use_local_frames
             else episode_data["left_wrist_images"][relative_step_idx]
         )
         current_wrist_image_latent_idx = segment_idx
@@ -939,7 +990,7 @@ class ALOHADataset(Dataset):
         # Add current right wrist image
         right_wrist_image = (
             right_current
-            if episode_data.get("is_lazy_jpeg", False)
+            if use_local_frames
             else episode_data["right_wrist_images"][relative_step_idx]
         )
         current_wrist_image2_latent_idx = segment_idx
@@ -950,7 +1001,7 @@ class ALOHADataset(Dataset):
 
         # Add current primary image
         primary_image = (
-            primary_current if episode_data.get("is_lazy_jpeg", False) else episode_data["images"][relative_step_idx]
+            primary_current if use_local_frames else episode_data["images"][relative_step_idx]
         )
         current_image_latent_idx = segment_idx
         frames.append(primary_image)
@@ -960,7 +1011,7 @@ class ALOHADataset(Dataset):
 
         # Add blank image for action chunk
         blank_action_image = np.zeros_like(
-            primary_current if episode_data.get("is_lazy_jpeg", False) else episode_data["images"][relative_step_idx]
+            primary_current if use_local_frames else episode_data["images"][relative_step_idx]
         )
         action_latent_idx = segment_idx
         frames.append(blank_action_image)
@@ -975,7 +1026,7 @@ class ALOHADataset(Dataset):
             # For now just add blank image
             blank_proprio_image = np.zeros_like(
                 primary_current
-                if episode_data.get("is_lazy_jpeg", False)
+                if use_local_frames
                 else episode_data["images"][relative_step_idx]
             )
             future_proprio_latent_idx = segment_idx
@@ -989,7 +1040,7 @@ class ALOHADataset(Dataset):
         # Add future left wrist image
         future_left_wrist_image = (
             left_future
-            if episode_data.get("is_lazy_jpeg", False)
+            if use_local_frames
             else episode_data["left_wrist_images"][future_frame_idx]
         )
         future_wrist_image_latent_idx = segment_idx
@@ -1001,7 +1052,7 @@ class ALOHADataset(Dataset):
         # Add future right wrist image
         future_right_wrist_image = (
             right_future
-            if episode_data.get("is_lazy_jpeg", False)
+            if use_local_frames
             else episode_data["right_wrist_images"][future_frame_idx]
         )
         future_wrist_image2_latent_idx = segment_idx
@@ -1012,7 +1063,7 @@ class ALOHADataset(Dataset):
 
         # Add future primary image
         future_image = (
-            primary_future if episode_data.get("is_lazy_jpeg", False) else episode_data["images"][future_frame_idx]
+            primary_future if use_local_frames else episode_data["images"][future_frame_idx]
         )
         future_image_latent_idx = segment_idx
         frames.append(future_image)
@@ -1024,7 +1075,7 @@ class ALOHADataset(Dataset):
         if self.return_value_function_returns:
             value_image = np.zeros_like(
                 primary_current
-                if episode_data.get("is_lazy_jpeg", False)
+                if use_local_frames
                 else episode_data["images"][relative_step_idx]
             )
             value_latent_idx = segment_idx

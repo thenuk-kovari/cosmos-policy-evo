@@ -32,17 +32,19 @@ evo_q0_towel_dataset = L(EVOQ0AnchoredDataset)(
     normalize_actions=True,
     num_duplicates_per_image=4,
     lazy_video_decompression=True,
-    # The same episodes serve two objectives. Demo samples are action-only;
-    # duplicated success-rollout samples are future-state-only, giving the
-    # effective 75% / 25% split below. Predict2's tokenizer contract still
-    # requires the final value segment to make a 41-frame sequence, but
-    # p_world_model=1.0 prevents value samples and the model loss mask below
-    # gives the structural value segment zero loss.
+    lazy_video_frame_access=True,
+    # Match the prior YAM recipe exactly: 75% demo samples jointly supervise
+    # action and future state, while 25% copied-success-rollout samples
+    # supervise future state only. Predict2's tokenizer contract requires the
+    # final value segment to make a 41-frame sequence, but p_world_model=1.0
+    # prevents value samples and the model loss mask gives that segment zero
+    # loss.
     treat_demos_as_success_rollouts=True,
     demonstration_sampling_prob=0.75,
     success_rollout_sampling_prob=1.0,
     return_value_function_returns=True,
     p_world_model=1.0,
+    gamma=0.998,
 )
 
 cosmos_predict2_2b_480p_evo_q0_state17 = LazyDict(
@@ -74,12 +76,11 @@ cosmos_predict2_2b_480p_evo_q0_state17 = LazyDict(
         ),
         model=L(CosmosPolicyVideo2WorldModel)(
             config=dict(
-                mask_loss_for_action_future_state_prediction=True,
-                mask_value_prediction_loss_for_policy_prediction=False,
+                mask_value_prediction_loss_for_policy_prediction=True,
             ),
         ),
         dataloader_train=L(DataLoader)(
-            num_workers=12,
+            num_workers=4,
             persistent_workers=True,
             pin_memory=True,
             dataset=evo_q0_towel_dataset,
