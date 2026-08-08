@@ -1,4 +1,4 @@
-"""Cosmos Policy 29D/14D adapter for the Evo Triton Python backend."""
+"""Cosmos Policy 17D q0 adapter for the Evo Triton Python backend."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import numpy as np
 
 from backends.base_backend import BaseBackend
 
-ACTION_DIM = 29
-PROPRIO_DIM = 14
+ACTION_DIM = 17
+PROPRIO_DIM = 17
 CHUNK_SIZE = 50
 
 
@@ -121,7 +121,7 @@ class CosmosPolicyBackend(BaseBackend):
     def load_model(self, params: dict[str, str]) -> None:
         os.environ.setdefault("COSMOS_POLICY_SKIP_CONFIG_CHECKPOINT_DOWNLOAD", "1")
         if not any("evo" in arg.lower() or "umi" in arg.lower() for arg in sys.argv):
-            sys.argv.append("evo")
+            sys.argv.append("evo-q0")
 
         checkpoint_root = Path(self.resolve_checkpoint_path(params))
         model_dir = _resolve_model_dir(checkpoint_root)
@@ -132,9 +132,9 @@ class CosmosPolicyBackend(BaseBackend):
         tokenizer_path = _sidecar(
             params, "TOKENIZER_PATH", checkpoint_root, "tokenizer.pth"
         )
-        task = params.get("TASK_DESCRIPTION", "fold the large blue towel twice")
+        task = params.get("TASK_DESCRIPTION", "fold the blue towel twice")
         experiment = params.get(
-            "EXPERIMENT", "predict2-2b-48demos-umi-ee12-8k"
+            "EXPERIMENT", "predict2-2b-evo-q0-state17"
         )
         denoising_steps = int(params.get("DENOISING_STEPS", "10"))
 
@@ -203,9 +203,9 @@ class CosmosPolicyBackend(BaseBackend):
             raise RuntimeError(f"Checkpoint config chunk size is {train_chunk}, expected {CHUNK_SIZE}")
 
         if np.asarray(self.dataset_stats["actions_min"]).shape != (ACTION_DIM,):
-            raise RuntimeError("dataset statistics do not contain 29 action dimensions")
+            raise RuntimeError("dataset statistics do not contain 17 action dimensions")
         if np.asarray(self.dataset_stats["proprio_min"]).shape != (PROPRIO_DIM,):
-            raise RuntimeError("dataset statistics do not contain 14 proprio dimensions")
+            raise RuntimeError("dataset statistics do not contain 17 proprio dimensions")
 
     def preprocess(self, raw_inputs: dict[str, np.ndarray]) -> dict:
         required = (
@@ -220,7 +220,7 @@ class CosmosPolicyBackend(BaseBackend):
 
         proprio = np.asarray(raw_inputs["observation__state"], dtype=np.float32).reshape(-1)
         if proprio.shape != (PROPRIO_DIM,):
-            raise ValueError(f"observation__state must have shape [14], got {proprio.shape}")
+            raise ValueError(f"observation__state must have shape [17], got {proprio.shape}")
         if not np.isfinite(proprio).all():
             raise ValueError("observation__state contains NaN or infinity")
 
@@ -254,7 +254,7 @@ class CosmosPolicyBackend(BaseBackend):
         )
         actions = np.asarray(result["actions"], dtype=np.float32)
         if actions.shape != (CHUNK_SIZE, ACTION_DIM):
-            raise RuntimeError(f"Cosmos returned {actions.shape}, expected [50,29]")
+            raise RuntimeError(f"Cosmos returned {actions.shape}, expected [50,17]")
         if not np.isfinite(actions).all():
             raise RuntimeError("Cosmos returned non-finite actions")
         return {"action": actions}

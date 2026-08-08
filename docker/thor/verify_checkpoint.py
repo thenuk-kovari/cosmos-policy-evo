@@ -15,10 +15,10 @@ def main() -> None:
         "name": "slot_b",
         "parameters": {
             "EXPERIMENT": {
-                "string_value": "predict2-2b-48demos-umi-ee12-8k"
+                "string_value": "predict2-2b-evo-q0-state17"
             },
             "TASK_DESCRIPTION": {
-                "string_value": "fold the large blue towel twice"
+                "string_value": "fold the blue towel twice"
             },
             "DENOISING_STEPS": {"string_value": "10"},
         },

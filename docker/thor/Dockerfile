@@ -73,7 +73,8 @@ ARG SOURCE_REVISION=uncommitted
 
 LABEL org.opencontainers.image.source="https://github.com/thenuk-kovari/video-policy-handoff" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
-      ai.kovari.policy.training-baseline="16c36a2977584e14df719c4980646a43978bdcf8" \
-      ai.kovari.policy.action-dim="29" \
-      ai.kovari.policy.proprio-dim="14" \
+      ai.kovari.policy.training-baseline="a38079969d4dd29a5dedda746764c84d9a1c7892" \
+      ai.kovari.policy.contract="evo_q0_observed_state_left_first_v1" \
+      ai.kovari.policy.action-dim="17" \
+      ai.kovari.policy.proprio-dim="17" \
       ai.kovari.policy.chunk-size="50"

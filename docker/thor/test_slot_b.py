@@ -44,7 +44,7 @@ def main() -> None:
 
     output = next(value for value in result["outputs"] if value["name"] == "action")
     action = np.asarray(output["data"], dtype=np.float32).reshape(output["shape"])
-    assert action.shape == (50, 29), action.shape
+    assert action.shape == (50, 17), action.shape
     assert np.isfinite(action).all()
     print(
         {
