@@ -101,3 +101,16 @@ class GenRobotEEQ0Dataset(ALOHADataset):
         if self.normalize_shared_actions:
             chunk = normalize_shared_action_chunk(chunk, self.dataset_stats)
         return chunk
+
+    def __getitem__(self, idx: int) -> dict:
+        sample = super().__getitem__(idx)
+
+        # GenRobot only records the two wrist cameras. ``cam_high`` is a
+        # structural placeholder required by the shared ALOHA sequence layout,
+        # not an observed camera. Marking both latent indices unavailable keeps
+        # that slot in the tensor shape while preventing it from being used as a
+        # conditioning view or as a future-image loss target. The two real
+        # wrist-camera indices remain active and supervised.
+        sample["current_image_latent_idx"] = -1
+        sample["future_image_latent_idx"] = -1
+        return sample

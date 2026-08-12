@@ -56,7 +56,11 @@ hard-checks sampled q0 chunks against those bounds.
 - `/sensor/magnetic_encoder`: width in metres, mapped by `width / 0.103`
 - `/sensor/camera0/compressed`: H.264 wrist video
 - absent third-person camera: explicit black video (never duplicate a wrist
-  view under a false camera identity)
+  view under a false camera identity). `GenRobotEEQ0Dataset` marks its current
+  and future latent indices unavailable, so this placeholder contributes
+  neither conditioning nor future-image loss. Only the two real wrist-camera
+  views are supervised; the placeholder merely preserves the shared
+  three-camera sequence shape for the later Evo teleop stage.
 - prompt: `fold the towel`
 
 The training image path matches existing Cosmos preprocessing: RGB video is
