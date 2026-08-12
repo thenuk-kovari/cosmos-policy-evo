@@ -44,9 +44,11 @@ slots are zero placeholders and are excluded from future-proprio loss by
 `proprio_dim_mask`.
 
 Normalization uses fixed physical bounds in
-`bimanual_shared35_fixed_physical_v1`, not empirical extrema. This keeps the
+`bimanual_shared35_fixed_physical_translation1m_v2`, not empirical extrema.
+EE translation uses +/-1 metre per 50-frame chunk; this contains the audited
+GenRobot range of -0.690 to +0.767 metre without clipping. This keeps the
 numerical meaning unchanged when Evo supervision is added later. The converter
-hard-checks sampled q0 chunks against those bounds.
+and validator hard-check every q0 chunk against those bounds.
 
 ## Source mapping
 

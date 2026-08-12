@@ -2,8 +2,11 @@ import numpy as np
 
 from cosmos_policy.datasets.ee_q0_actions import (
     ELEVATOR_DELTA,
+    LEFT_EE_TRANSLATION,
     LEFT_GRIPPER,
     LEFT_JOINT_DELTA,
+    NORMALIZATION_CONTRACT,
+    RIGHT_EE_TRANSLATION,
     RIGHT_GRIPPER,
     RIGHT_JOINT_DELTA,
     SHARED_ACTION_DIM,
@@ -104,6 +107,11 @@ def test_absolute_storage_reconstructs_same_q0_chunk():
 
 def test_fixed_statistics_keep_masked_zero_channels_at_zero():
     statistics = canonical_shared_statistics()
+    assert NORMALIZATION_CONTRACT == "bimanual_shared35_fixed_physical_translation1m_v2"
+    for translation in (LEFT_EE_TRANSLATION, RIGHT_EE_TRANSLATION):
+        np.testing.assert_allclose(statistics["actions_min"][translation], -1.0)
+        np.testing.assert_allclose(statistics["actions_max"][translation], 1.0)
+
     chunk = np.zeros((50, SHARED_ACTION_DIM), dtype=np.float32)
     normalized = normalize_shared_action_chunk(chunk, statistics)
     np.testing.assert_allclose(normalized[:, LEFT_JOINT_DELTA], 0)

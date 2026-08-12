@@ -36,7 +36,7 @@ UMI_ACTIVE_DIMS = np.array(
 
 CONTRACT_NAME = "bimanual_q0_body_ee6d_joint35_v1"
 STORAGE_CONTRACT = "bimanual_absolute_world_pose_ee6d_source_v1"
-NORMALIZATION_CONTRACT = "bimanual_shared35_fixed_physical_v1"
+NORMALIZATION_CONTRACT = "bimanual_shared35_fixed_physical_translation1m_v2"
 ROTATION_6D_LAYOUT = "first_two_columns_c0_then_c1"
 
 
@@ -276,7 +276,7 @@ def canonical_shared_statistics() -> dict[str, np.ndarray]:
     action_min = np.zeros(SHARED_ACTION_DIM, dtype=np.float32)
     action_max = np.zeros(SHARED_ACTION_DIM, dtype=np.float32)
     for translation in (LEFT_EE_TRANSLATION, RIGHT_EE_TRANSLATION):
-        action_min[translation], action_max[translation] = -0.5, 0.5
+        action_min[translation], action_max[translation] = -1.0, 1.0
     for rotation in (LEFT_EE_ROTATION_6D, RIGHT_EE_ROTATION_6D):
         action_min[rotation], action_max[rotation] = -1.0, 1.0
     for joints in (LEFT_JOINT_DELTA, RIGHT_JOINT_DELTA):
