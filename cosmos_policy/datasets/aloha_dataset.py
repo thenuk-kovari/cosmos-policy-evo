@@ -318,6 +318,15 @@ class ALOHADataset(Dataset):
                     raise ValueError(f"{file}: action_dim_mask must have shape ({actions.shape[1]},)")
                 if not np.any(action_dim_mask) or not np.all(np.isin(action_dim_mask, (0.0, 1.0))):
                     raise ValueError(f"{file}: action_dim_mask must be non-empty binary availability")
+                proprio_dim_mask = (
+                    f["proprio_dim_mask"][:].astype(np.float32)
+                    if "proprio_dim_mask" in f
+                    else np.ones(proprio.shape[1], dtype=np.float32)
+                )
+                if proprio_dim_mask.ndim != 1 or proprio_dim_mask.shape[0] != proprio.shape[1]:
+                    raise ValueError(f"{file}: proprio_dim_mask must have shape ({proprio.shape[1]},)")
+                if not np.any(proprio_dim_mask) or not np.all(np.isin(proprio_dim_mask, (0.0, 1.0))):
+                    raise ValueError(f"{file}: proprio_dim_mask must be non-empty binary availability")
                 task_description = f.attrs.get("task_description")
                 if isinstance(task_description, bytes):
                     task_description = task_description.decode("utf-8")
@@ -395,6 +404,7 @@ class ALOHADataset(Dataset):
                     proprio=proprio,
                     actions=actions,
                     action_dim_mask=action_dim_mask,
+                    proprio_dim_mask=proprio_dim_mask,
                     command=command,
                     num_steps=num_steps,
                     returns=returns.copy() if self.return_value_function_returns else None,
@@ -474,6 +484,7 @@ class ALOHADataset(Dataset):
                     proprio=episode_data["proprio"],
                     actions=episode_data["actions"],
                     action_dim_mask=episode_data["action_dim_mask"],
+                    proprio_dim_mask=episode_data["proprio_dim_mask"],
                     command=episode_data["command"],
                     num_steps=episode_data["num_steps"],
                     is_lazy_video=episode_data.get("is_lazy_video", False),
@@ -1183,6 +1194,7 @@ class ALOHADataset(Dataset):
             "command": episode_data["command"],
             "actions": action_chunk,
             "action_dim_mask": action_dim_mask,
+            "proprio_dim_mask": episode_data["proprio_dim_mask"].copy(),
             "t5_text_embeddings": torch.squeeze(self.t5_text_embeddings[episode_data["command"]]),
             "t5_text_mask": torch.ones(512, dtype=torch.int64),
             "fps": 16,
