@@ -36,8 +36,25 @@ UMI_ACTIVE_DIMS = np.array(
 
 CONTRACT_NAME = "bimanual_q0_body_ee6d_joint35_v1"
 STORAGE_CONTRACT = "bimanual_absolute_world_pose_ee6d_source_v1"
+EVO_STORAGE_CONTRACT = "bimanual_absolute_base_pose_umi_axes_joint_state_source_v3"
 NORMALIZATION_CONTRACT = "bimanual_shared35_fixed_physical_translation1m_v2"
 ROTATION_6D_LAYOUT = "first_two_columns_c0_then_c1"
+INV_SQRT_2 = 1.0 / np.sqrt(2.0)
+# Fixed child-axis relabelling supplied in scalar-first quaternion order.
+EVO_TO_UMI_ORIENTATION_OFFSET_WXYZ = np.array(
+    [0.0, INV_SQRT_2, 0.0, INV_SQRT_2], dtype=np.float64
+)
+EVO_TO_UMI_ORIENTATION_OFFSET_MATRIX = np.array(
+    [[0.0, 0.0, 1.0], [0.0, -1.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64
+)
+
+
+def relabel_evo_orientation_to_umi(rotation: np.ndarray) -> np.ndarray:
+    """Right-multiply an Evo EE orientation by the fixed UMI-axis offset."""
+    rotation = np.asarray(rotation, dtype=np.float64)
+    if rotation.shape[-2:] != (3, 3):
+        raise ValueError(f"expected rotation [...,3,3], got {rotation.shape}")
+    return np.matmul(rotation, EVO_TO_UMI_ORIENTATION_OFFSET_MATRIX)
 
 
 def normalize_quaternion_xyzw(quaternion: np.ndarray) -> np.ndarray:
@@ -265,6 +282,21 @@ def build_umi_shared_action_chunk_from_storage(
     mask = np.zeros(SHARED_ACTION_DIM, dtype=np.float32)
     mask[UMI_ACTIVE_DIMS] = 1.0
     return action, mask
+
+
+def build_evo_shared_action_chunk_from_storage(
+    source: np.ndarray,
+    anchor_index: int,
+    chunk_size: int = CHUNK_SIZE,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build fully supervised Evo targets from measured-state storage."""
+    source = validate_shared_pose_source(source)
+    indices = future_indices(anchor_index, len(source), chunk_size)
+    action, _ = build_umi_shared_action_chunk_from_storage(source, anchor_index, chunk_size)
+    action[:, LEFT_JOINT_DELTA] = source[indices, LEFT_JOINT_DELTA] - source[anchor_index, LEFT_JOINT_DELTA]
+    action[:, RIGHT_JOINT_DELTA] = source[indices, RIGHT_JOINT_DELTA] - source[anchor_index, RIGHT_JOINT_DELTA]
+    action[:, ELEVATOR_DELTA] = source[indices, ELEVATOR_DELTA] - source[anchor_index, ELEVATOR_DELTA]
+    return action, np.ones(SHARED_ACTION_DIM, dtype=np.float32)
 
 
 def canonical_shared_statistics() -> dict[str, np.ndarray]:

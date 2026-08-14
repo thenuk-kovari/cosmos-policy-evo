@@ -27,6 +27,9 @@ from cosmos_policy.datasets.umi_aloha_dataset import UMIALOHADataset
 from cosmos_policy.config.experiment.genrobot_ee_q0_config import (
     cosmos_predict2_2b_480p_genrobot_towel_ee6d35,
 )
+from cosmos_policy.config.experiment.evo_ee_joint_q0_config import (
+    cosmos_predict2_2b_480p_evo_ee6d_joint35_teleop,
+)
 from cosmos_policy.config.experiment.evo_q0_config import (
     cosmos_predict2_2b_480p_evo_q0_state17,
 )
@@ -654,6 +657,7 @@ def register_configs():
         cosmos_predict2_2b_480p_umi_large_blue_towel_ee12,
         cosmos_predict2_2b_480p_evo_q0_state17,
         cosmos_predict2_2b_480p_genrobot_towel_ee6d35,
+        cosmos_predict2_2b_480p_evo_ee6d_joint35_teleop,
     ]:
         experiment_name = _item["job"]["name"]
         log.info(f"Registering experiment: {experiment_name}")

@@ -1,4 +1,9 @@
-"""Cosmos Policy 17D q0 adapter for the Evo Triton Python backend."""
+"""Cosmos Policy 35D EE+joint adapter for the Evo Triton Python backend.
+
+The checkpoint predicts the shared 35D training representation. Evo executes
+only its contiguous joint/gripper/elevator slice (dimensions 18:35), which is
+exposed to the Orin as the established 17D q0 runtime contract.
+"""
 
 from __future__ import annotations
 
@@ -11,9 +16,11 @@ import numpy as np
 
 from backends.base_backend import BaseBackend
 
-ACTION_DIM = 17
+SOURCE_ACTION_DIM = 35
+DEPLOYED_ACTION_DIM = 17
 PROPRIO_DIM = 17
 CHUNK_SIZE = 50
+EXECUTABLE_ACTION_SLICE = slice(18, 35)
 
 
 def _install_thor_import_shims(tokenizer_path: Path) -> None:
@@ -51,6 +58,31 @@ def _install_thor_import_shims(tokenizer_path: Path) -> None:
         return original_resolver(path)
 
     checkpoint_utils.resolve_checkpoint_path = local_checkpoint_resolver
+
+
+def _load_t5_cache_readonly(path: Path, required_task: str) -> None:
+    """Load a precomputed T5 cache without creating lock files beside it."""
+    import pickle
+    import torch
+    import cosmos_policy.experiments.robot.cosmos_utils as cosmos_utils
+
+    with path.open("rb") as handle:
+        data = pickle.load(handle)
+    if not isinstance(data, dict) or required_task not in data:
+        raise RuntimeError(
+            f"T5 cache {path} does not contain required task {required_task!r}; "
+            f"available keys={list(data) if isinstance(data, dict) else type(data)}"
+        )
+    embedding = data[required_task]
+    if not isinstance(embedding, torch.Tensor) or tuple(embedding.shape[-2:]) != (512, 1024):
+        raise RuntimeError(f"Invalid T5 embedding for {required_task!r}: {type(embedding)}, {getattr(embedding, 'shape', None)}")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    cosmos_utils.t5_text_embeddings_cache.clear()
+    cosmos_utils.t5_text_embeddings_cache.update(
+        {key: value.to(device) if isinstance(value, torch.Tensor) else value for key, value in data.items()}
+    )
+    cosmos_utils.t5_text_embeddings_path_global = str(path)
+    cosmos_utils.t5_text_embeddings_newly_computed = False
 
 
 def _apply_thor_model_fallbacks(model) -> dict[str, int]:
@@ -108,10 +140,19 @@ def _sidecar(params: dict[str, str], key: str, checkpoint_root: Path, filename: 
     return path
 
 
-def _chw_float_to_hwc_uint8(value: np.ndarray, name: str) -> np.ndarray:
+def _image_to_hwc_uint8(value: np.ndarray, name: str) -> np.ndarray:
+    """Decode fresh-main JPEG transport; retain direct-call CHW test support."""
     array = np.asarray(value)
+    if array.ndim == 1 and array.dtype == np.uint8:
+        import cv2
+
+        bgr = cv2.imdecode(array, cv2.IMREAD_COLOR)
+        if bgr is None:
+            raise ValueError(f"{name} is not a valid JPEG payload")
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        return cv2.resize(rgb, (224, 224), interpolation=cv2.INTER_LINEAR)
     if array.ndim != 3 or array.shape[0] != 3:
-        raise ValueError(f"{name} must have shape [3,H,W], got {array.shape}")
+        raise ValueError(f"{name} must be uint8 JPEG [N] or float CHW [3,H,W], got {array.shape}")
     if not np.isfinite(array).all():
         raise ValueError(f"{name} contains NaN or infinity")
     return np.rint(np.clip(array, 0.0, 1.0) * 255.0).astype(np.uint8).transpose(1, 2, 0)
@@ -120,8 +161,8 @@ def _chw_float_to_hwc_uint8(value: np.ndarray, name: str) -> np.ndarray:
 class CosmosPolicyBackend(BaseBackend):
     def load_model(self, params: dict[str, str]) -> None:
         os.environ.setdefault("COSMOS_POLICY_SKIP_CONFIG_CHECKPOINT_DOWNLOAD", "1")
-        if not any("evo" in arg.lower() or "umi" in arg.lower() for arg in sys.argv):
-            sys.argv.append("evo-q0")
+        if not any("genrobot" in arg.lower() or "ee6d" in arg.lower() for arg in sys.argv):
+            sys.argv.append("genrobot-ee6d")
 
         checkpoint_root = Path(self.resolve_checkpoint_path(params))
         model_dir = _resolve_model_dir(checkpoint_root)
@@ -134,7 +175,7 @@ class CosmosPolicyBackend(BaseBackend):
         )
         task = params.get("TASK_DESCRIPTION", "fold the blue towel twice")
         experiment = params.get(
-            "EXPERIMENT", "predict2-2b-evo-q0-state17"
+            "EXPERIMENT", "predict2-2b-evo-ee6d-joint35-teleop"
         )
         denoising_steps = int(params.get("DENOISING_STEPS", "10"))
 
@@ -151,12 +192,11 @@ class CosmosPolicyBackend(BaseBackend):
         from cosmos_policy.experiments.robot.cosmos_utils import (
             get_action,
             get_model,
-            init_t5_text_embeddings_cache,
             load_dataset_stats,
         )
 
         actual_contract = (source_action_dim, source_proprio_dim, source_chunk_size)
-        expected_contract = (ACTION_DIM, PROPRIO_DIM, CHUNK_SIZE)
+        expected_contract = (SOURCE_ACTION_DIM, PROPRIO_DIM, CHUNK_SIZE)
         if actual_contract != expected_contract:
             raise RuntimeError(
                 f"Cosmos source contract {actual_contract} does not match {expected_contract}"
@@ -191,7 +231,7 @@ class CosmosPolicyBackend(BaseBackend):
             num_queries_best_of_n=1,
             use_parallel_inference=False,
         )
-        init_t5_text_embeddings_cache(str(t5_path))
+        _load_t5_cache_readonly(t5_path, task)
         self.dataset_stats = load_dataset_stats(str(stats_path))
         self.model, self.cosmos_config = get_model(self.cfg)
         self.fallbacks = _apply_thor_model_fallbacks(self.model)
@@ -202,8 +242,8 @@ class CosmosPolicyBackend(BaseBackend):
         if train_chunk != CHUNK_SIZE:
             raise RuntimeError(f"Checkpoint config chunk size is {train_chunk}, expected {CHUNK_SIZE}")
 
-        if np.asarray(self.dataset_stats["actions_min"]).shape != (ACTION_DIM,):
-            raise RuntimeError("dataset statistics do not contain 17 action dimensions")
+        if np.asarray(self.dataset_stats["actions_min"]).shape != (SOURCE_ACTION_DIM,):
+            raise RuntimeError("dataset statistics do not contain 35 action dimensions")
         if np.asarray(self.dataset_stats["proprio_min"]).shape != (PROPRIO_DIM,):
             raise RuntimeError("dataset statistics do not contain 17 proprio dimensions")
 
@@ -228,13 +268,13 @@ class CosmosPolicyBackend(BaseBackend):
             "observation": {
                 "task_description": self.task,
                 "proprio": proprio,
-                "primary_image": _chw_float_to_hwc_uint8(
+                "primary_image": _image_to_hwc_uint8(
                     raw_inputs["observation__images__base"], "base image"
                 ),
-                "left_wrist_image": _chw_float_to_hwc_uint8(
+                "left_wrist_image": _image_to_hwc_uint8(
                     raw_inputs["observation__images__left_gripper"], "left wrist image"
                 ),
-                "right_wrist_image": _chw_float_to_hwc_uint8(
+                "right_wrist_image": _image_to_hwc_uint8(
                     raw_inputs["observation__images__right_gripper"], "right wrist image"
                 ),
             }
@@ -253,11 +293,16 @@ class CosmosPolicyBackend(BaseBackend):
             generate_future_state_and_value_in_parallel=False,
         )
         actions = np.asarray(result["actions"], dtype=np.float32)
-        if actions.shape != (CHUNK_SIZE, ACTION_DIM):
-            raise RuntimeError(f"Cosmos returned {actions.shape}, expected [50,17]")
+        if actions.shape != (CHUNK_SIZE, SOURCE_ACTION_DIM):
+            raise RuntimeError(f"Cosmos returned {actions.shape}, expected [50,35]")
         if not np.isfinite(actions).all():
             raise RuntimeError("Cosmos returned non-finite actions")
-        return {"action": actions}
+        deployed_actions = actions[:, EXECUTABLE_ACTION_SLICE]
+        if deployed_actions.shape != (CHUNK_SIZE, DEPLOYED_ACTION_DIM):
+            raise RuntimeError(
+                f"Executable action slice has {deployed_actions.shape}, expected [50,17]"
+            )
+        return {"action": deployed_actions}
 
     def postprocess(self, raw_outputs: dict) -> dict[str, np.ndarray]:
         return {"action": raw_outputs["action"]}

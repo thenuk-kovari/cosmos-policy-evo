@@ -1,8 +1,13 @@
 {
   "type": "cosmos_policy",
   "contract": "evo_q0_observed_state_left_first_v1",
+  "source_contract": "evo_ee6d_joint35_left_first_q0_v1",
+  "source_action_shape": [50, 35],
+  "executable_action_slice": [18, 35],
+  "experiment": "predict2-2b-evo-ee6d-joint35-teleop",
   "task_description": "fold the blue towel twice",
   "chunk_size": 50,
+  "n_action_steps": 50,
   "input_features": {
     "observation.state": {
       "shape": [
@@ -38,7 +43,6 @@
   "output_features": {
     "action": {
       "shape": [
-        50,
         17
       ],
       "dtype": "float32"

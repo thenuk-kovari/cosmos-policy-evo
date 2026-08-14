@@ -343,6 +343,19 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
 
         return output_batch, kendall_loss
 
+    @torch.no_grad()
+    def validation_step(
+        self, data_batch: dict[str, torch.Tensor], iteration: int
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        """Evaluate the policy supervised diffusion objective on held-out data.
+
+        Predict2 base validation generates samples and requires the world-model-only
+        ``guidance`` field. Policy data lacks it, and that path does not produce the
+        action/proprio metrics consumed by our validation callback. Reuse the policy
+        objective in eval/no-grad mode to preserve training masks and normalization.
+        """
+        return self.training_step(data_batch, iteration)
+
     def compute_loss_with_epsilon_and_sigma(
         self,
         x0_B_C_T_H_W: torch.Tensor,

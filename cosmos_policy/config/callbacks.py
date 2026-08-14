@@ -610,7 +610,11 @@ class WandbCallback(WandBCallbackImage):
                         )
 
                 if wandb:
-                    wandb.log(info, step=iteration)
+                    # Training metrics have already committed this iteration. Stage
+                    # validation on the next W&B row so it is not dropped as an
+                    # out-of-order write; the following training log commits it.
+                    info["validation/iteration"] = iteration
+                    wandb.log(info, commit=False)
 
                 log.info(f"Validation final loss (iteration {iteration}): {avg_final_loss:4f}")
 

@@ -1,6 +1,8 @@
 import numpy as np
 
 from cosmos_policy.datasets.ee_q0_actions import (
+    EVO_TO_UMI_ORIENTATION_OFFSET_MATRIX,
+    EVO_TO_UMI_ORIENTATION_OFFSET_WXYZ,
     ELEVATOR_DELTA,
     LEFT_EE_TRANSLATION,
     LEFT_GRIPPER,
@@ -15,11 +17,13 @@ from cosmos_policy.datasets.ee_q0_actions import (
     build_umi_shared_action_chunk_from_storage,
     canonical_shared_statistics,
     normalize_shared_action_chunk,
+    quaternion_xyzw_to_matrix,
     shared_q0_action_extrema,
     decode_q0_relative_pose,
     encode_q0_relative_pose,
     matrix_to_rotation_6d,
     rotation_6d_to_matrix,
+    relabel_evo_orientation_to_umi,
 )
 
 
@@ -37,6 +41,50 @@ def test_rotation_6d_identity_layout_and_roundtrip():
     six = matrix_to_rotation_6d(rotation)
     np.testing.assert_allclose(six[0], [1, 0, 0, 0, 1, 0])
     np.testing.assert_allclose(rotation_6d_to_matrix(six), rotation, atol=1e-12)
+
+
+def test_rotation_6d_is_column_zero_then_column_one_not_numpy_row_flatten():
+    theta = 0.7
+    rotation = _rotz(theta)
+    expected = np.concatenate((rotation[:, 0], rotation[:, 1]))
+    actual = matrix_to_rotation_6d(rotation)
+    np.testing.assert_allclose(actual, expected, atol=0.0)
+    assert not np.allclose(actual, rotation[:, :2].reshape(6))
+
+
+def test_evo_orientation_is_right_multiplied_by_exact_umi_axis_offset():
+    root_half = 1.0 / np.sqrt(2.0)
+    np.testing.assert_allclose(
+        EVO_TO_UMI_ORIENTATION_OFFSET_WXYZ,
+        [0.0, root_half, 0.0, root_half],
+        atol=0.0,
+    )
+    offset_xyzw = EVO_TO_UMI_ORIENTATION_OFFSET_WXYZ[[1, 2, 3, 0]]
+    np.testing.assert_allclose(
+        quaternion_xyzw_to_matrix(offset_xyzw),
+        EVO_TO_UMI_ORIENTATION_OFFSET_MATRIX,
+        atol=1e-12,
+    )
+    # With identity Evo orientation, the relabelled local axes expressed in
+    # Evo coordinates are: new X=old Z, new Y=-old Y, new Z=old X.
+    np.testing.assert_allclose(
+        relabel_evo_orientation_to_umi(np.eye(3)),
+        np.column_stack(([0, 0, 1], [0, -1, 0], [1, 0, 0])),
+        atol=0.0,
+    )
+    evo_rotation = _rotz(0.37)
+    relabelled = relabel_evo_orientation_to_umi(evo_rotation)
+    np.testing.assert_allclose(
+        relabelled,
+        evo_rotation @ EVO_TO_UMI_ORIENTATION_OFFSET_MATRIX,
+        atol=1e-12,
+    )
+    assert not np.allclose(
+        relabelled,
+        EVO_TO_UMI_ORIENTATION_OFFSET_MATRIX @ evo_rotation,
+    )
+    np.testing.assert_allclose(relabelled.T @ relabelled, np.eye(3), atol=1e-12)
+    np.testing.assert_allclose(np.linalg.det(relabelled), 1.0, atol=1e-12)
 
 
 def test_q0_pose_roundtrip_and_world_transform_invariance():
