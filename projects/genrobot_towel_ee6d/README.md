@@ -89,6 +89,33 @@ rejections are recorded in `conversion_manifest.json`. Preparation requires at
 least 600 accepted episodes and writes the fixed statistics plus the single T5
 embedding.
 
+### Build the random-access frame store
+
+After conversion, build one indexed JPEG sidecar per episode. The original
+HDF5 and MP4 files are retained and remain the fallback; this changes only how
+training fetches individual frames. Each worker reads an episode's MP4s once,
+in order, instead of seeking through an MP4 GOP for every training sample.
+
+```bash
+uv run --extra cu128 --group aloha --python 3.10 \
+  python projects/genrobot_towel_ee6d/build_indexed_frame_store.py \
+  "$GENROBOT_EE_Q0_DATA_DIR" --workers 8 --jpeg-quality 95
+```
+
+Run the same builder on the converted Evo stage-two directory before training:
+
+```bash
+uv run --extra cu128 --group aloha --python 3.10 \
+  python projects/genrobot_towel_ee6d/build_indexed_frame_store.py \
+  "$EVO_EE_JOINT_Q0_DATA_DIR" --workers 8 --jpeg-quality 95
+```
+
+The builder validates frame counts and samples decoded frames from each of the
+first three episodes. It rejects a sampled camera below 35 dB PSNR and writes
+`indexed_frame_store_report.json`. Do not run `--overwrite` concurrently with
+training. Both training configs prefer a valid sidecar automatically; if it is
+absent, they use the existing MP4 random-access path.
+
 ## Train
 
 ```bash

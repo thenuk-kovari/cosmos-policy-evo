@@ -32,6 +32,7 @@ evo_ee_joint_q0_dataset = L(EvoEEJointQ0Dataset)(
     num_duplicates_per_image=4,
     lazy_video_decompression=True,
     lazy_video_frame_access=True,
+    prefer_indexed_frame_store=True,
     # Preserve the established Cosmos/YAM 3:1 interleaved schedule: 75% demo
     # samples supervise action + future state and 25% copied-success samples
     # supervise future state only.
@@ -56,6 +57,7 @@ evo_ee_joint_q0_val_dataset = L(EvoEEJointQ0Dataset)(
     num_duplicates_per_image=4,
     lazy_video_decompression=True,
     lazy_video_frame_access=True,
+    prefer_indexed_frame_store=True,
     # Validation measures the demo objective directly. It does not duplicate
     # episodes into the auxiliary future-state-only population.
     treat_demos_as_success_rollouts=False,

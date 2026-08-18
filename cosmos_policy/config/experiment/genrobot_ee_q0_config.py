@@ -32,6 +32,7 @@ genrobot_towel_dataset = L(GenRobotEEQ0Dataset)(
     num_duplicates_per_image=4,
     lazy_video_decompression=True,
     lazy_video_frame_access=True,
+    prefer_indexed_frame_store=True,
     # Same deterministic dataset mixture as the prior YAM/Evo q0 recipe:
     # 75% demo indices predict action + future state and 25% copied-success
     # indices predict future state only. DistributedSampler shuffles this fixed

@@ -19,6 +19,11 @@ from cosmos_policy.datasets.ee_q0_actions import (
     EVO_TO_UMI_ORIENTATION_OFFSET_WXYZ, canonical_shared_statistics,
     matrix_to_rotation_6d, relabel_evo_orientation_to_umi,
 )
+from projects.evo_q0_towel.newoffice73_split import (
+    VALIDATION_OUTPUT_INDICES,
+    load_original_split,
+    split_summary,
+)
 
 OPEN_RAD = -0.90163709
 
@@ -91,18 +96,23 @@ def main():
     ap.add_argument("--urdf",required=True)
     ap.add_argument("--out",required=True)
     ap.add_argument("--val-count",type=int,default=6)
-    ap.add_argument("--expected-episodes",type=int,default=72)
+    ap.add_argument("--expected-episodes",type=int,default=73)
     args=ap.parse_args()
     roots=dict(x.split("=",1) for x in args.dataset)
-    rows=list(selected(args.selection,roots))
-    if len(rows)!=args.expected_episodes:
+    split_rows=load_original_split(args.selection)
+    if args.val_count!=6 or args.expected_episodes!=73:
         raise ValueError(
-            f"expected {args.expected_episodes} accepted episodes, got {len(rows)}"
+            "the original Evo-only ablation split requires --val-count 6 and --expected-episodes 73"
         )
+    rows=list(selected(args.selection,roots))
+    identities=[(name,index) for _,name,index,_ in rows]
+    expected=[(str(row["dataset"]),int(row["file_index"])) for row in split_rows]
+    if identities!=expected:
+        raise RuntimeError("resolved episode ordering differs from the original Evo-only split contract")
     out=Path(args.out)
     if out.exists(): raise FileExistsError(out)
     out.mkdir(parents=True)
-    val=set(np.linspace(0,len(rows)-1,args.val_count+2,dtype=int)[1:-1])
+    val=set(VALIDATION_OUTPUT_INDICES)
     fk=FK(args.urdf); manifest=[]
     for n,(output,name,index,path) in enumerate(rows,1):
         print(f"[{n}/{len(rows)}] {name}/file-{index:03d}",flush=True)
@@ -148,7 +158,8 @@ def main():
               "includes_joint":"carriage_joint"},
         "recorded_action_column_used":False,
         "counts":{"total":len(rows),"train":len(rows)-len(val),"val":len(val)},
-        "validation_output_indices":[int(value) for value in sorted(val)],"episodes":manifest}
+        "validation_output_indices":[int(value) for value in sorted(val)],
+        "ablation_split":split_summary(split_rows),"episodes":manifest}
     (out/"conversion_manifest.json").write_text(json.dumps(payload,indent=2)+"\n")
 
 if __name__=="__main__": main()

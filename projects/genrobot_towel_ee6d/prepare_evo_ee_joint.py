@@ -30,6 +30,11 @@ from cosmos_policy.datasets.ee_q0_actions import (
     canonical_shared_statistics,
 )
 from projects.genrobot_towel_ee6d.convert_evo_fk import FK, convert_states
+from projects.evo_q0_towel.newoffice73_split import (
+    VALIDATION_OUTPUT_INDICES,
+    load_original_split,
+    split_summary,
+)
 
 
 FPS = 30
@@ -224,20 +229,27 @@ def main() -> None:
     args = parser.parse_args()
 
     roots = {}
+    if args.val_count != 6 or args.expected_episodes != 73:
+        raise ValueError(
+            "the original Evo-only ablation split requires --val-count 6 and --expected-episodes 73"
+        )
     for value in args.dataset:
         name, separator, raw_path = value.partition("=")
         if not separator or not name or not raw_path:
             raise ValueError(f"invalid --dataset {value!r}; expected NAME=/path")
         roots[name] = Path(raw_path)
+    split_rows = load_original_split(args.selection)
     selected = load_selection(args.selection, roots)
-    if len(selected) != args.expected_episodes:
-        raise ValueError(f"expected {args.expected_episodes} accepted episodes, got {len(selected)}")
+    selected_identities = [(dataset, file_index) for dataset, _, file_index in selected]
+    contract_identities = [(str(row["dataset"]), int(row["file_index"])) for row in split_rows]
+    if selected_identities != contract_identities:
+        raise RuntimeError("resolved episode ordering differs from the original Evo-only split contract")
     if args.out.exists():
         raise FileExistsError(f"refusing to overwrite existing output {args.out}")
     (args.out / "train").mkdir(parents=True)
     (args.out / "val").mkdir(parents=True)
 
-    validation = validation_indices(len(selected), args.val_count)
+    validation = set(VALIDATION_OUTPUT_INDICES)
     fk = FK(args.urdf)
     episodes = []
     for output_index, (dataset, source, source_index) in enumerate(selected):
@@ -272,6 +284,7 @@ def main() -> None:
         },
         "validation_method": "yam_linspace_evenly_spaced",
         "validation_output_indices": sorted(validation),
+        "ablation_split": split_summary(split_rows),
         "counts": {"total": len(episodes), "train": len(episodes) - len(validation), "val": len(validation)},
         "total_frames": sum(row["frames"] for row in episodes),
         "episodes": episodes,
