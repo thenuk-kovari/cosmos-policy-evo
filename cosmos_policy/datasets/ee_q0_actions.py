@@ -13,6 +13,8 @@ The 6-D rotation stores the first two *columns* of ``dR`` as
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import numpy as np
 
 
@@ -38,6 +40,7 @@ CONTRACT_NAME = "bimanual_q0_body_ee6d_joint35_v1"
 STORAGE_CONTRACT = "bimanual_absolute_world_pose_ee6d_source_v1"
 EVO_STORAGE_CONTRACT = "bimanual_absolute_base_pose_umi_axes_joint_state_source_v3"
 NORMALIZATION_CONTRACT = "bimanual_shared35_fixed_physical_translation1m_v2"
+EVO_TRANSFER_NORMALIZATION_CONTRACT = "bimanual_shared35_stage1_ee_evo_q0_empirical_v3"
 ROTATION_6D_LAYOUT = "first_two_columns_c0_then_c1"
 INV_SQRT_2 = 1.0 / np.sqrt(2.0)
 # Fixed child-axis relabelling supplied in scalar-first quaternion order.
@@ -333,6 +336,50 @@ def canonical_shared_statistics() -> dict[str, np.ndarray]:
         }
 
     return {**statistics(action_min, action_max, "actions"), **statistics(proprio_min, proprio_max, "proprio")}
+
+
+def evo_transfer_shared_statistics(
+    evo_q0_statistics: Mapping[str, np.ndarray | list[float]],
+) -> dict[str, np.ndarray]:
+    """Map the successful Evo-only 17-D statistics into the shared 35-D head.
+
+    Stage-one UMI-supervised dimensions retain their original canonical
+    normalization. Evo-only dimensions reuse the exact statistics from the
+    successful 17-D q0 run so ordinary joint motion is not compressed by the
+    deliberately broad physical safety bounds.
+
+    The old 17-D layout is left joints 0:7, left gripper 7, right joints
+    8:15, right gripper 15, and elevator 16. Grippers are intentionally not
+    copied: the transfer contract uses shared canonical semantics
+    ``closed=0, open=1`` rather than the old negative motor radians.
+    """
+
+    required = (
+        "actions_min", "actions_max", "actions_mean", "actions_std", "actions_median",
+        "proprio_min", "proprio_max", "proprio_mean", "proprio_std", "proprio_median",
+    )
+    reference: dict[str, np.ndarray] = {}
+    for key in required:
+        value = np.asarray(evo_q0_statistics.get(key), dtype=np.float32)
+        if value.shape != (17,) or not np.isfinite(value).all():
+            raise ValueError(f"Evo q0 reference {key} must contain 17 finite values")
+        reference[key] = value
+    if np.any(reference["actions_max"] <= reference["actions_min"]):
+        raise ValueError("Evo q0 action reference has a non-positive span")
+    if np.any(reference["proprio_max"] <= reference["proprio_min"]):
+        raise ValueError("Evo q0 proprio reference has a non-positive span")
+
+    result = canonical_shared_statistics()
+    for suffix in ("min", "max", "mean", "std", "median"):
+        action_key = f"actions_{suffix}"
+        proprio_key = f"proprio_{suffix}"
+        result[action_key][LEFT_JOINT_DELTA] = reference[action_key][0:7]
+        result[action_key][RIGHT_JOINT_DELTA] = reference[action_key][8:15]
+        result[action_key][ELEVATOR_DELTA] = reference[action_key][16]
+        result[proprio_key][0:7] = reference[proprio_key][0:7]
+        result[proprio_key][8:15] = reference[proprio_key][8:15]
+        result[proprio_key][16] = reference[proprio_key][16]
+    return result
 
 
 def normalize_shared_action_chunk(chunk: np.ndarray, statistics: dict[str, np.ndarray]) -> np.ndarray:

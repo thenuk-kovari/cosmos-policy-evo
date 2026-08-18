@@ -24,10 +24,11 @@ from PIL import Image
 from cosmos_policy.datasets.ee_q0_actions import (
     CONTRACT_NAME,
     EVO_STORAGE_CONTRACT,
+    EVO_TRANSFER_NORMALIZATION_CONTRACT,
     EVO_TO_UMI_ORIENTATION_OFFSET_WXYZ,
     NORMALIZATION_CONTRACT,
     SHARED_ACTION_DIM,
-    canonical_shared_statistics,
+    evo_transfer_shared_statistics,
 )
 from projects.genrobot_towel_ee6d.convert_evo_fk import FK, convert_states
 from projects.evo_q0_towel.newoffice73_split import (
@@ -223,6 +224,7 @@ def main() -> None:
     parser.add_argument("--selection", type=Path, required=True)
     parser.add_argument("--urdf", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--evo-q0-statistics", type=Path, required=True)
     parser.add_argument("--val-count", type=int, default=6)
     parser.add_argument("--expected-episodes", type=int, default=73)
     parser.add_argument("--image-size", type=int, default=256)
@@ -259,13 +261,18 @@ def main() -> None:
             convert_episode(source, args.out / split, output_index, dataset, source_index, split, args.image_size, fk)
         )
 
-    statistics = {key: value.tolist() for key, value in canonical_shared_statistics().items()}
+    evo_q0_reference = json.loads(args.evo_q0_statistics.read_text())
+    statistics = {
+        key: value.tolist() for key, value in evo_transfer_shared_statistics(evo_q0_reference).items()
+    }
     (args.out / "dataset_statistics.json").write_text(json.dumps(statistics, indent=2) + "\n")
+    shutil.copy2(args.evo_q0_statistics, args.out / "evo_q0_reference_statistics.json")
     shutil.copy2(args.selection, args.out / "accepted_selection.json")
     manifest = {
         "action_contract": CONTRACT_NAME,
         "storage_contract": EVO_STORAGE_CONTRACT,
-        "normalization_contract": NORMALIZATION_CONTRACT,
+        "normalization_contract": EVO_TRANSFER_NORMALIZATION_CONTRACT,
+        "storage_normalization_contract": NORMALIZATION_CONTRACT,
         "action_dim": SHARED_ACTION_DIM,
         "proprio_dim": PROPRIO_DIM,
         "chunk_size": 50,

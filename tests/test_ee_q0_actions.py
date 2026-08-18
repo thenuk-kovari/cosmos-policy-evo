@@ -4,6 +4,7 @@ from cosmos_policy.datasets.ee_q0_actions import (
     EVO_TO_UMI_ORIENTATION_OFFSET_MATRIX,
     EVO_TO_UMI_ORIENTATION_OFFSET_WXYZ,
     ELEVATOR_DELTA,
+    EVO_TRANSFER_NORMALIZATION_CONTRACT,
     LEFT_EE_TRANSLATION,
     LEFT_GRIPPER,
     LEFT_JOINT_DELTA,
@@ -16,6 +17,7 @@ from cosmos_policy.datasets.ee_q0_actions import (
     build_shared_pose_source,
     build_umi_shared_action_chunk_from_storage,
     canonical_shared_statistics,
+    evo_transfer_shared_statistics,
     normalize_shared_action_chunk,
     quaternion_xyzw_to_matrix,
     shared_q0_action_extrema,
@@ -167,6 +169,45 @@ def test_fixed_statistics_keep_masked_zero_channels_at_zero():
     np.testing.assert_allclose(normalized[:, ELEVATOR_DELTA], 0)
     # Absolute closed gripper maps to -1 under the canonical [0,1] range.
     np.testing.assert_allclose(normalized[:, [LEFT_GRIPPER, RIGHT_GRIPPER]], -1)
+
+
+def test_evo_transfer_statistics_preserve_shared_dims_and_map_evo_only_exactly():
+    reference = {}
+    for prefix in ("actions", "proprio"):
+        minimum = np.linspace(-2.0, -0.4, 17, dtype=np.float32)
+        maximum = minimum + np.linspace(0.5, 2.1, 17, dtype=np.float32)
+        reference[f"{prefix}_min"] = minimum
+        reference[f"{prefix}_max"] = maximum
+        reference[f"{prefix}_mean"] = (minimum + maximum) / 2
+        reference[f"{prefix}_std"] = (maximum - minimum) / 4
+        reference[f"{prefix}_median"] = (minimum + maximum) / 3
+
+    canonical = canonical_shared_statistics()
+    transfer = evo_transfer_shared_statistics(reference)
+    assert EVO_TRANSFER_NORMALIZATION_CONTRACT == "bimanual_shared35_stage1_ee_evo_q0_empirical_v3"
+
+    for suffix in ("min", "max", "mean", "std", "median"):
+        action_key = f"actions_{suffix}"
+        proprio_key = f"proprio_{suffix}"
+        # Every UMI-supervised EE/gripper channel keeps its stage-one meaning.
+        np.testing.assert_array_equal(transfer[action_key][:18], canonical[action_key][:18])
+        np.testing.assert_array_equal(
+            transfer[action_key][[LEFT_GRIPPER, RIGHT_GRIPPER]],
+            canonical[action_key][[LEFT_GRIPPER, RIGHT_GRIPPER]],
+        )
+        np.testing.assert_array_equal(
+            transfer[proprio_key][[7, 15]], canonical[proprio_key][[7, 15]]
+        )
+
+    for suffix in ("min", "max", "mean", "std", "median"):
+        action_key = f"actions_{suffix}"
+        proprio_key = f"proprio_{suffix}"
+        np.testing.assert_array_equal(transfer[action_key][LEFT_JOINT_DELTA], reference[action_key][0:7])
+        np.testing.assert_array_equal(transfer[action_key][RIGHT_JOINT_DELTA], reference[action_key][8:15])
+        np.testing.assert_array_equal(transfer[action_key][ELEVATOR_DELTA], reference[action_key][16])
+        np.testing.assert_array_equal(transfer[proprio_key][0:7], reference[proprio_key][0:7])
+        np.testing.assert_array_equal(transfer[proprio_key][8:15], reference[proprio_key][8:15])
+        np.testing.assert_array_equal(transfer[proprio_key][16], reference[proprio_key][16])
 
 
 def test_vectorized_extrema_match_brute_force_chunks():

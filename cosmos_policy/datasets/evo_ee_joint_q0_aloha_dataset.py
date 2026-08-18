@@ -14,10 +14,11 @@ from cosmos_policy.datasets.ee_q0_actions import (
     CHUNK_SIZE,
     CONTRACT_NAME,
     EVO_STORAGE_CONTRACT,
+    EVO_TRANSFER_NORMALIZATION_CONTRACT,
     NORMALIZATION_CONTRACT,
     SHARED_ACTION_DIM,
     build_evo_shared_action_chunk_from_storage,
-    canonical_shared_statistics,
+    evo_transfer_shared_statistics,
     normalize_shared_action_chunk,
 )
 
@@ -56,11 +57,17 @@ class EvoEEJointQ0Dataset(ALOHADataset):
             key: np.asarray(value, dtype=np.float32)
             for key, value in json.loads(stats_path.read_text()).items()
         }
-        expected_statistics = canonical_shared_statistics()
+        reference_path = statistics_dir / "evo_q0_reference_statistics.json"
+        if not reference_path.is_file():
+            raise FileNotFoundError(f"missing Evo-only q0 reference statistics: {reference_path}")
+        reference_statistics = json.loads(reference_path.read_text())
+        expected_statistics = evo_transfer_shared_statistics(reference_statistics)
         for key, expected in expected_statistics.items():
             actual = np.asarray(self.dataset_stats.get(key), dtype=np.float32)
-            if actual.shape != expected.shape or not np.allclose(actual, expected, atol=1e-7):
-                raise ValueError(f"{stats_path}: {key} does not match {NORMALIZATION_CONTRACT}")
+            if actual.shape != expected.shape or not np.array_equal(actual, expected):
+                raise ValueError(
+                    f"{stats_path}: {key} does not match {EVO_TRANSFER_NORMALIZATION_CONTRACT}"
+                )
 
         expected_action_mask = np.ones(SHARED_ACTION_DIM, dtype=np.float32)
         expected_proprio_mask = np.ones(PROPRIO_DIM, dtype=np.float32)
@@ -100,6 +107,16 @@ class EvoEEJointQ0Dataset(ALOHADataset):
             for name, wanted in expected.items():
                 if attr(name) != wanted:
                     raise ValueError(f"{path}: {name}={attr(name)!r}, expected {wanted!r}")
+
+    def __getitem__(self, idx: int) -> dict:
+        sample = super().__getitem__(idx)
+        # A normalized error e corresponds to e * (max-min)/2 physical units.
+        # Carry this immutable scale into the model only for diagnostics; it is
+        # not an input and does not alter the optimization objective.
+        sample["action_denormalization_scale"] = (
+            (self.dataset_stats["actions_max"] - self.dataset_stats["actions_min"]) / 2.0
+        ).astype(np.float32)
+        return sample
 
     def _get_action_chunk(self, episode_data: dict, relative_step_idx: int) -> np.ndarray:
         chunk, mask = build_evo_shared_action_chunk_from_storage(
