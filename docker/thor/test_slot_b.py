@@ -4,6 +4,7 @@
 import json
 from urllib.request import Request, urlopen
 
+import cv2
 import numpy as np
 
 
@@ -13,7 +14,12 @@ def main() -> None:
         stats = json.load(handle)
 
     state = np.asarray(stats["proprio_median"], dtype=np.float32)
-    image = np.zeros((3, 224, 224), dtype=np.float32)
+    encoded_ok, encoded_image = cv2.imencode(
+        ".jpg", np.zeros((224, 224, 3), dtype=np.uint8)
+    )
+    if not encoded_ok:
+        raise RuntimeError("failed to encode synthetic JPEG")
+    image = encoded_image.reshape(-1)
     arrays = {
         "observation__state": state,
         "observation__images__base": image,
@@ -26,7 +32,7 @@ def main() -> None:
             {
                 "name": name,
                 "shape": list(array.shape),
-                "datatype": "FP32",
+                "datatype": "UINT8" if array.dtype == np.uint8 else "FP32",
                 "data": array.reshape(-1).tolist(),
             }
             for name, array in arrays.items()
