@@ -1,0 +1,32 @@
+{
+  "type": "cosmos_policy",
+  "contract": "evo_q0_observed_state_left_first_v1",
+  "source_contract": "evo_q0_observed_state_left_first_v1",
+  "source_action_shape": [50, 17],
+  "experiment": "predict2-2b-evo-q0-state17",
+  "task_description": "fold the blue towel twice",
+  "chunk_size": 50,
+  "n_action_steps": 50,
+  "input_features": {
+    "observation.state": {"shape": [17], "dtype": "float32"},
+    "observation.images.base": {"shape": [3, 224, 224], "dtype": "float32"},
+    "observation.images.left_gripper": {"shape": [3, 224, 224], "dtype": "float32"},
+    "observation.images.right_gripper": {"shape": [3, 224, 224], "dtype": "float32"}
+  },
+  "output_features": {"action": {"shape": [17], "dtype": "float32"}},
+  "proprio_layout": [
+    "left_joint_1", "left_joint_2", "left_joint_3", "left_joint_4",
+    "left_joint_5", "left_joint_6", "left_joint_7", "left_radial_gripper",
+    "right_joint_1", "right_joint_2", "right_joint_3", "right_joint_4",
+    "right_joint_5", "right_joint_6", "right_joint_7", "right_radial_gripper",
+    "elevator"
+  ],
+  "action_layout": [
+    "left_joint_1_q0_delta", "left_joint_2_q0_delta", "left_joint_3_q0_delta",
+    "left_joint_4_q0_delta", "left_joint_5_q0_delta", "left_joint_6_q0_delta",
+    "left_joint_7_q0_delta", "left_radial_gripper_absolute",
+    "right_joint_1_q0_delta", "right_joint_2_q0_delta", "right_joint_3_q0_delta",
+    "right_joint_4_q0_delta", "right_joint_5_q0_delta", "right_joint_6_q0_delta",
+    "right_joint_7_q0_delta", "right_radial_gripper_absolute", "elevator_q0_delta"
+  ]
+}

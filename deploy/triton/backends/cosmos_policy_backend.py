@@ -1,8 +1,7 @@
-"""Cosmos Policy 35D EE+joint adapter for the Evo Triton Python backend.
+"""Cosmos Policy adapter for the Evo Triton Python backend.
 
-The checkpoint predicts the shared 35D training representation. Evo executes
-only its contiguous joint/gripper/elevator slice (dimensions 18:35), which is
-exposed to the Orin as the established 17D q0 runtime contract.
+Supports native 17D Evo q0 heads and 35D EE+joint transfer heads while always
+exposing the established 17D q0 runtime contract to the Orin.
 """
 
 from __future__ import annotations
@@ -16,11 +15,48 @@ import numpy as np
 
 from backends.base_backend import BaseBackend
 
-SOURCE_ACTION_DIM = 35
 DEPLOYED_ACTION_DIM = 17
 PROPRIO_DIM = 17
 CHUNK_SIZE = 50
-EXECUTABLE_ACTION_SLICE = slice(18, 35)
+
+_SOURCE_CONTRACTS = {
+    "evo_q0_observed_state_left_first_v1": {
+        "source_action_dim": 17,
+        "experiment": "predict2-2b-evo-q0-state17",
+        "platform_argument": "evo-q0",
+        "executable_action_slice": slice(0, 17),
+    },
+    "evo_ee6d_joint35_left_first_q0_v1": {
+        "source_action_dim": 35,
+        "experiment": "predict2-2b-evo-ee6d-joint35-teleop",
+        "platform_argument": "genrobot-ee6d",
+        "executable_action_slice": slice(18, 35),
+    },
+}
+
+
+def _runtime_contract(checkpoint_root: Path) -> dict:
+    """Resolve the checkpoint's native head from its required sidecar."""
+    config_path = checkpoint_root / "config.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Required policy sidecar does not exist: {config_path}")
+    with config_path.open() as stream:
+        policy = json.load(stream)
+    source_contract = policy.get("source_contract", policy.get("contract"))
+    if source_contract not in _SOURCE_CONTRACTS:
+        raise RuntimeError(f"Unsupported Cosmos source contract: {source_contract!r}")
+    resolved = dict(_SOURCE_CONTRACTS[source_contract])
+    expected_shape = [CHUNK_SIZE, resolved["source_action_dim"]]
+    declared_shape = policy.get("source_action_shape", expected_shape)
+    if declared_shape != expected_shape:
+        raise RuntimeError(
+            f"Policy declares source_action_shape={declared_shape}, expected "
+            f"{expected_shape} for {source_contract}"
+        )
+    resolved["source_contract"] = source_contract
+    resolved["experiment"] = policy.get("experiment", resolved["experiment"])
+    resolved["task"] = policy.get("task_description", "fold the blue towel twice")
+    return resolved
 
 
 def _install_thor_import_shims(tokenizer_path: Path) -> None:
@@ -161,10 +197,14 @@ def _image_to_hwc_uint8(value: np.ndarray, name: str) -> np.ndarray:
 class CosmosPolicyBackend(BaseBackend):
     def load_model(self, params: dict[str, str]) -> None:
         os.environ.setdefault("COSMOS_POLICY_SKIP_CONFIG_CHECKPOINT_DOWNLOAD", "1")
-        if not any("genrobot" in arg.lower() or "ee6d" in arg.lower() for arg in sys.argv):
-            sys.argv.append("genrobot-ee6d")
-
         checkpoint_root = Path(self.resolve_checkpoint_path(params))
+        runtime = _runtime_contract(checkpoint_root)
+        if not any(
+            token in arg.lower()
+            for arg in sys.argv
+            for token in ("genrobot", "ee6d", "evo-q0", "evo_q0")
+        ):
+            sys.argv.append(runtime["platform_argument"])
         model_dir = _resolve_model_dir(checkpoint_root)
         stats_path = _sidecar(
             params, "DATASET_STATS_PATH", checkpoint_root, "dataset_statistics.json"
@@ -173,10 +213,10 @@ class CosmosPolicyBackend(BaseBackend):
         tokenizer_path = _sidecar(
             params, "TOKENIZER_PATH", checkpoint_root, "tokenizer.pth"
         )
-        task = params.get("TASK_DESCRIPTION", "fold the blue towel twice")
-        experiment = params.get(
-            "EXPERIMENT", "predict2-2b-evo-ee6d-joint35-teleop"
-        )
+        task = runtime.get("task") or params.get("TASK_DESCRIPTION", "fold the blue towel twice")
+        experiment = runtime.get("experiment") or params.get("EXPERIMENT")
+        expected_source_action_dim = int(runtime["source_action_dim"])
+        executable_action_slice = runtime["executable_action_slice"]
         denoising_steps = int(params.get("DENOISING_STEPS", "10"))
 
         # Config imports must happen only after the EVO platform selector and
@@ -196,7 +236,7 @@ class CosmosPolicyBackend(BaseBackend):
         )
 
         actual_contract = (source_action_dim, source_proprio_dim, source_chunk_size)
-        expected_contract = (SOURCE_ACTION_DIM, PROPRIO_DIM, CHUNK_SIZE)
+        expected_contract = (expected_source_action_dim, PROPRIO_DIM, CHUNK_SIZE)
         if actual_contract != expected_contract:
             raise RuntimeError(
                 f"Cosmos source contract {actual_contract} does not match {expected_contract}"
@@ -237,13 +277,17 @@ class CosmosPolicyBackend(BaseBackend):
         self.fallbacks = _apply_thor_model_fallbacks(self.model)
         self.task = task
         self._get_action = get_action
+        self.source_action_dim = expected_source_action_dim
+        self.executable_action_slice = executable_action_slice
 
         train_chunk = self.cosmos_config.dataloader_train.dataset.chunk_size
         if train_chunk != CHUNK_SIZE:
             raise RuntimeError(f"Checkpoint config chunk size is {train_chunk}, expected {CHUNK_SIZE}")
 
-        if np.asarray(self.dataset_stats["actions_min"]).shape != (SOURCE_ACTION_DIM,):
-            raise RuntimeError("dataset statistics do not contain 35 action dimensions")
+        if np.asarray(self.dataset_stats["actions_min"]).shape != (self.source_action_dim,):
+            raise RuntimeError(
+                f"dataset statistics do not contain {self.source_action_dim} action dimensions"
+            )
         if np.asarray(self.dataset_stats["proprio_min"]).shape != (PROPRIO_DIM,):
             raise RuntimeError("dataset statistics do not contain 17 proprio dimensions")
 
@@ -293,11 +337,13 @@ class CosmosPolicyBackend(BaseBackend):
             generate_future_state_and_value_in_parallel=False,
         )
         actions = np.asarray(result["actions"], dtype=np.float32)
-        if actions.shape != (CHUNK_SIZE, SOURCE_ACTION_DIM):
-            raise RuntimeError(f"Cosmos returned {actions.shape}, expected [50,35]")
+        if actions.shape != (CHUNK_SIZE, self.source_action_dim):
+            raise RuntimeError(
+                f"Cosmos returned {actions.shape}, expected [50,{self.source_action_dim}]"
+            )
         if not np.isfinite(actions).all():
             raise RuntimeError("Cosmos returned non-finite actions")
-        deployed_actions = actions[:, EXECUTABLE_ACTION_SLICE]
+        deployed_actions = actions[:, self.executable_action_slice]
         if deployed_actions.shape != (CHUNK_SIZE, DEPLOYED_ACTION_DIM):
             raise RuntimeError(
                 f"Executable action slice has {deployed_actions.shape}, expected [50,17]"
