@@ -274,6 +274,15 @@ class CosmosPolicyBackend(BaseBackend):
         _load_t5_cache_readonly(t5_path, task)
         self.dataset_stats = load_dataset_stats(str(stats_path))
         self.model, self.cosmos_config = get_model(self.cfg)
+        # Cosmos Policy's evaluated Predict2 deployment schedule deliberately
+        # differs from the training SDE (200 -> 0.01).  Keep the initial noise
+        # deterministic, but sample over the cookbook's inference range.
+        self.model.sde.sigma_max = float(params.get("SIGMA_MAX", "80"))
+        self.model.sde.sigma_min = float(params.get("SIGMA_MIN", "4"))
+        if (self.model.sde.sigma_max, self.model.sde.sigma_min) != (80.0, 4.0):
+            raise RuntimeError(
+                "Cosmos Predict2 inference requires sigma_max=80 and sigma_min=4"
+            )
         self.fallbacks = _apply_thor_model_fallbacks(self.model)
         self.task = task
         self._get_action = get_action

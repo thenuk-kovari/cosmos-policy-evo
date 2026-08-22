@@ -59,6 +59,8 @@ def main() -> None:
     actions = np.asarray(result["action"], dtype=np.float32)
     assert actions.shape == (CHUNK_SIZE, DEPLOYED_ACTION_DIM), actions.shape
     assert np.isfinite(actions).all()
+    assert backend.model.sde.sigma_max == 80.0
+    assert backend.model.sde.sigma_min == 4.0
     print(
         json.dumps(
             {
@@ -68,6 +70,8 @@ def main() -> None:
                 "action_shape": list(actions.shape),
                 "action_min": float(actions.min()),
                 "action_max": float(actions.max()),
+                "sigma_max": backend.model.sde.sigma_max,
+                "sigma_min": backend.model.sde.sigma_min,
                 "thor_fallbacks": backend.fallbacks,
             },
             sort_keys=True,
