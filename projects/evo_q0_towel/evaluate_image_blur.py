@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare clean and image-noised Evo-q0 predictions for one training MCAP."""
+"""Compare clean and Gaussian-blurred Evo-q0 predictions for one training MCAP."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import tritonclient.grpc as grpcclient
-from PIL import Image
+from PIL import Image, ImageFilter
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT))
@@ -35,6 +35,11 @@ def jpeg(image: np.ndarray) -> np.ndarray:
     return np.frombuffer(stream.getvalue(), dtype=np.uint8)
 
 
+def gaussian_blur(image: np.ndarray, radius: float) -> np.ndarray:
+    """Apply the paired image intervention in RGB space before JPEG transport."""
+    return np.asarray(Image.fromarray(image, "RGB").filter(ImageFilter.GaussianBlur(radius)))
+
+
 def infer(client: grpcclient.InferenceServerClient, state: np.ndarray, images: dict[str, np.ndarray]) -> np.ndarray:
     arrays = {
         "observation__state": np.asarray(state, dtype=np.float32),
@@ -55,12 +60,18 @@ def infer(client: grpcclient.InferenceServerClient, state: np.ndarray, images: d
     return action
 
 
-def svg_plot(path: Path, frames: np.ndarray, clean: np.ndarray, noisy: np.ndarray) -> None:
+def svg_plot(
+    path: Path,
+    frames: np.ndarray,
+    clean: np.ndarray,
+    blurred: np.ndarray,
+    blur_radius: float,
+) -> None:
     width, height = 1280, 640
     left, right, top, bottom = 85, 30, 45, 75
     plot_w, plot_h = width - left - right, height - top - bottom
     x0, x1 = float(frames.min()), float(frames.max())
-    y1 = max(float(clean.max()), float(noisy.max()), 1e-8)
+    y1 = max(float(clean.max()), float(blurred.max()), 1e-8)
 
     def point(x: float, y: float) -> tuple[float, float]:
         px = left + (x - x0) / max(x1 - x0, 1.0) * plot_w
@@ -78,21 +89,21 @@ def svg_plot(path: Path, frames: np.ndarray, clean: np.ndarray, noisy: np.ndarra
         _, y = point(x0, value)
         grid.append(f'<line x1="{left}" y1="{y:.2f}" x2="{left + plot_w}" y2="{y:.2f}" stroke="#ddd"/>')
         labels.append(f'<text x="{left - 10}" y="{y + 5:.2f}" text-anchor="end">{value:.4f}</text>')
-    body = f"""<!doctype html><meta charset="utf-8"><title>Evo q0 image-noise sensitivity</title>
+    body = f"""<!doctype html><meta charset="utf-8"><title>Evo q0 image-blur sensitivity</title>
 <style>body{{font-family:sans-serif;margin:24px}} text{{font-size:13px}} .legend{{font-size:15px}}</style>
-<h2>Evo q0: clean versus image-noised prediction error</h2>
-<p>Gaussian pixel noise: σ=25. Error is mean(|prediction − ground truth|) over 17 physical action channels.</p>
+<h2>Evo q0: clean versus Gaussian-blurred prediction error</h2>
+<p>Gaussian blur radius: {blur_radius:.1f}px. Error is mean(|prediction − ground truth|) over 17 physical action channels.</p>
 <svg viewBox="0 0 {width} {height}" width="100%" xmlns="http://www.w3.org/2000/svg">
 {"".join(grid)}{"".join(labels)}
 <line x1="{left}" y1="{top + plot_h}" x2="{left + plot_w}" y2="{top + plot_h}" stroke="black"/>
 <line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_h}" stroke="black"/>
-{polyline(clean, "#1769aa")}{polyline(noisy, "#d32f2f")}
+{polyline(clean, "#1769aa")}{polyline(blurred, "#d32f2f")}
 <text x="{width / 2}" y="{height - 18}" text-anchor="middle">MCAP timestep (30 Hz)</text>
 <text transform="translate(20 {height / 2}) rotate(-90)" text-anchor="middle">mean absolute action error</text>
 <line x1="{left + 15}" y1="20" x2="{left + 55}" y2="20" stroke="#1769aa" stroke-width="3"/>
 <text class="legend" x="{left + 62}" y="25">clean images</text>
 <line x1="{left + 180}" y1="20" x2="{left + 220}" y2="20" stroke="#d32f2f" stroke-width="3"/>
-<text class="legend" x="{left + 227}" y="25">images + N(0,25²)</text>
+<text class="legend" x="{left + 227}" y="25">Gaussian-blurred images</text>
 </svg>"""
     path.write_text(body)
 
@@ -101,8 +112,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("mcap", type=Path)
     parser.add_argument("--triton-url", default="192.168.90.2:8201")
-    parser.add_argument("--out", type=Path, default=Path("/tmp/evoq0_image_noise"))
-    parser.add_argument("--seed", type=int, default=0, help="Gaussian-noise RNG seed")
+    parser.add_argument("--out", type=Path, default=Path("/tmp/evoq0_image_blur"))
+    parser.add_argument("--blur-radius", type=float, default=25.0)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -123,22 +134,18 @@ def main() -> None:
     if not client.is_model_ready("slot_b"):
         raise RuntimeError(f"slot_b is not ready at {args.triton_url}")
 
-    rng = np.random.default_rng(args.seed)
-    clean_predictions, noisy_predictions, ground_truth, valid_rows = [], [], [], []
+    clean_predictions, blurred_predictions, ground_truth, valid_rows = [], [], [], []
     for number, anchor in enumerate(anchors, start=1):
         images = {name: decode_image(cameras[name][int(camera_indices[name][anchor])][1]) for name in cameras}
-        noisy_images = {
-            name: np.clip(image.astype(np.float32) + rng.normal(0, 25, image.shape), 0, 255).astype(np.uint8)
-            for name, image in images.items()
-        }
+        blurred_images = {name: gaussian_blur(image, args.blur_radius) for name, image in images.items()}
         clean_predictions.append(infer(client, states[anchor], images))
-        noisy_predictions.append(infer(client, states[anchor], noisy_images))
+        blurred_predictions.append(infer(client, states[anchor], blurred_images))
         ground_truth.append(build_q0_anchored_chunk(states, int(anchor)))
         valid_rows.append(min(CHUNK_SIZE, len(states) - int(anchor) - 1))
         print(f"[{number}/{len(anchors)}] anchor={anchor} valid_rows={valid_rows[-1]}", flush=True)
 
     clean_array = np.stack(clean_predictions)
-    noisy_array = np.stack(noisy_predictions)
+    blurred_array = np.stack(blurred_predictions)
     truth_array = np.stack(ground_truth)
     valid_array = np.asarray(valid_rows, dtype=np.int64)
     np.savez_compressed(
@@ -146,36 +153,36 @@ def main() -> None:
         anchors=anchors,
         valid_rows=valid_array,
         clean_prediction=clean_array,
-        noisy_prediction=noisy_array,
+        blurred_prediction=blurred_array,
         ground_truth=truth_array,
     )
 
-    frame_rows, clean_errors, noisy_errors = [], [], []
+    frame_rows, clean_errors, blurred_errors = [], [], []
     with (args.out / "errors.csv").open("w", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["frame", "seconds", "anchor", "chunk_row", "clean_mae", "noisy_mae"])
+        writer.writerow(["frame", "seconds", "anchor", "chunk_row", "clean_mae", "blurred_mae"])
         for chunk_index, anchor in enumerate(anchors):
             for row in range(int(valid_array[chunk_index])):
                 frame = int(anchor + row + 1)
                 clean_error = float(np.abs(clean_array[chunk_index, row] - truth_array[chunk_index, row]).mean())
-                noisy_error = float(np.abs(noisy_array[chunk_index, row] - truth_array[chunk_index, row]).mean())
-                writer.writerow([frame, frame / 30.0, int(anchor), row, clean_error, noisy_error])
+                blurred_error = float(np.abs(blurred_array[chunk_index, row] - truth_array[chunk_index, row]).mean())
+                writer.writerow([frame, frame / 30.0, int(anchor), row, clean_error, blurred_error])
                 frame_rows.append(frame)
                 clean_errors.append(clean_error)
-                noisy_errors.append(noisy_error)
+                blurred_errors.append(blurred_error)
 
     frame_array = np.asarray(frame_rows)
     clean_error_array = np.asarray(clean_errors)
-    noisy_error_array = np.asarray(noisy_errors)
-    svg_plot(args.out / "plot.html", frame_array, clean_error_array, noisy_error_array)
+    blurred_error_array = np.asarray(blurred_errors)
+    svg_plot(args.out / "plot.html", frame_array, clean_error_array, blurred_error_array, args.blur_radius)
     summary = {
         "mcap": str(args.mcap),
         "frames": len(grid),
         "chunks": len(anchors),
-        "noise_std_uint8": 25,
+        "gaussian_blur_radius_px": args.blur_radius,
         "clean_mae": float(clean_error_array.mean()),
-        "noisy_mae": float(noisy_error_array.mean()),
-        "noisy_to_clean_ratio": float(noisy_error_array.mean() / max(clean_error_array.mean(), 1e-12)),
+        "blurred_mae": float(blurred_error_array.mean()),
+        "blurred_to_clean_ratio": float(blurred_error_array.mean() / max(clean_error_array.mean(), 1e-12)),
         "plot": str(args.out / "plot.html"),
     }
     (args.out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
