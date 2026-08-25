@@ -1,0 +1,34 @@
+name: lehome_top_short_q0
+
+image_shape: [3, 240, 320]
+dataset_path: ${oc.env:LEHOME_ZARR,data/lehome_top_short_q0.zarr}
+split_manifest: ${oc.env:LEHOME_SPLIT_MANIFEST,assets/lehome_top_short_230_train_20_val.json}
+
+shape_meta: &shape_meta
+  obs:
+    top_rgb:
+      shape: ${task.image_shape}
+      type: rgb
+    left_rgb:
+      shape: ${task.image_shape}
+      type: rgb
+    right_rgb:
+      shape: ${task.image_shape}
+      type: rgb
+    q0_state:
+      shape: [12]
+      type: low_dim
+  action:
+    shape: [12]
+
+env_runner:
+  _target_: diffusion_policy.env_runner.noop_image_runner.NoopImageRunner
+
+dataset:
+  _target_: diffusion_policy.dataset.lehome_q0_image_dataset.LeHomeQ0ImageDataset
+  shape_meta: *shape_meta
+  dataset_path: ${task.dataset_path}
+  split_manifest: ${task.split_manifest}
+  split: train
+  horizon: ${horizon}
+  n_obs_steps: ${n_obs_steps}

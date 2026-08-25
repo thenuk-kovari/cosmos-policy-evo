@@ -1,0 +1,5 @@
+{
+  "description": "Generated deterministically by scripts/prepare_lehome_top_short.py with --seed 42. Replace this placeholder by running the preparation script; do not hand-edit splits.",
+  "train": [],
+  "val": []
+}
