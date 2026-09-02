@@ -57,6 +57,8 @@ from cosmos_policy.datasets.dataset_utils import (
     rescale_episode_data,
     resize_images,
 )
+from cosmos_policy.datasets.indexed_frame_store import load_frames as load_indexed_frames
+from cosmos_policy.datasets.indexed_frame_store import load_index as load_indexed_frame_store
 
 # Set floating point precision to 3 decimal places and disable line wrapping
 np.set_printoptions(precision=3, linewidth=np.inf)
@@ -193,6 +195,7 @@ class ALOHADataset(Dataset):
         gamma: float = 0.998,
         lazy_video_decompression: bool = False,
         lazy_video_frame_access: bool = False,
+        prefer_indexed_frame_store: bool = True,
         rollout_data_dir: str = "",
         demonstration_sampling_prob: float = 0.5,
         success_rollout_sampling_prob: float = 0.5,
@@ -227,6 +230,7 @@ class ALOHADataset(Dataset):
             return_value_function_returns (bool): If True, returns value function returns for rollout episodes
             gamma (float): Discount factor for value function returns
             lazy_video_decompression (bool): Whether to lazily decompress videos
+            prefer_indexed_frame_store (bool): Prefer an indexed JPEG sidecar when one exists
             rollout_data_dir (str): Path to directory containing rollout data (if provided, will load rollout data in addition to base dataset)
             demonstration_sampling_prob (float): Probability of sampling from demonstration data instead of rollout data
             success_rollout_sampling_prob (float): Probability of sampling from success rollout data instead of failure rollout data
@@ -259,6 +263,7 @@ class ALOHADataset(Dataset):
         if lazy_video_frame_access and not lazy_video_decompression:
             raise ValueError("lazy_video_frame_access requires lazy_video_decompression=True")
         self.lazy_video_frame_access = lazy_video_frame_access
+        self.prefer_indexed_frame_store = prefer_indexed_frame_store
         self.rollout_data_dir = rollout_data_dir
         self.demonstration_sampling_prob = demonstration_sampling_prob
         self.success_rollout_sampling_prob = success_rollout_sampling_prob
@@ -318,6 +323,15 @@ class ALOHADataset(Dataset):
                     raise ValueError(f"{file}: action_dim_mask must have shape ({actions.shape[1]},)")
                 if not np.any(action_dim_mask) or not np.all(np.isin(action_dim_mask, (0.0, 1.0))):
                     raise ValueError(f"{file}: action_dim_mask must be non-empty binary availability")
+                proprio_dim_mask = (
+                    f["proprio_dim_mask"][:].astype(np.float32)
+                    if "proprio_dim_mask" in f
+                    else np.ones(proprio.shape[1], dtype=np.float32)
+                )
+                if proprio_dim_mask.ndim != 1 or proprio_dim_mask.shape[0] != proprio.shape[1]:
+                    raise ValueError(f"{file}: proprio_dim_mask must have shape ({proprio.shape[1]},)")
+                if not np.any(proprio_dim_mask) or not np.all(np.isin(proprio_dim_mask, (0.0, 1.0))):
+                    raise ValueError(f"{file}: proprio_dim_mask must be non-empty binary availability")
                 task_description = f.attrs.get("task_description")
                 if isinstance(task_description, bytes):
                     task_description = task_description.decode("utf-8")
@@ -343,13 +357,22 @@ class ALOHADataset(Dataset):
                     }
                     file_dir = os.path.dirname(file)
                     video_paths = {k: os.path.join(file_dir, v) for k, v in video_filenames.items()}
+                    indexed_frame_store = (
+                        load_indexed_frame_store(file, expected_frames=len(actions))
+                        if self.prefer_indexed_frame_store
+                        else None
+                    )
 
                     if self.lazy_video_decompression:
                         # Lazy path: store paths and frame count only
                         images = None
                         left_wrist_images = None
                         right_wrist_images = None
-                        episode_num_steps = get_video_num_frames(video_paths["cam_high"])  # assume aligned
+                        episode_num_steps = (
+                            indexed_frame_store["num_frames"]
+                            if indexed_frame_store is not None
+                            else get_video_num_frames(video_paths["cam_high"])
+                        )
                     else:
                         # Immediate decompression: load all frames now
                         images = load_video_as_images(
@@ -395,6 +418,7 @@ class ALOHADataset(Dataset):
                     proprio=proprio,
                     actions=actions,
                     action_dim_mask=action_dim_mask,
+                    proprio_dim_mask=proprio_dim_mask,
                     command=command,
                     num_steps=num_steps,
                     returns=returns.copy() if self.return_value_function_returns else None,
@@ -406,6 +430,8 @@ class ALOHADataset(Dataset):
                         episode_entry["video_paths"] = video_paths
                         episode_entry["is_lazy_video"] = True
                         episode_entry["is_lazy_video_frame_access"] = self.lazy_video_frame_access
+                        if indexed_frame_store is not None:
+                            episode_entry["indexed_frame_store"] = indexed_frame_store
                     else:
                         episode_entry["images"] = images
                         episode_entry["left_wrist_images"] = left_wrist_images
@@ -474,6 +500,7 @@ class ALOHADataset(Dataset):
                     proprio=episode_data["proprio"],
                     actions=episode_data["actions"],
                     action_dim_mask=episode_data["action_dim_mask"],
+                    proprio_dim_mask=episode_data["proprio_dim_mask"],
                     command=episode_data["command"],
                     num_steps=episode_data["num_steps"],
                     is_lazy_video=episode_data.get("is_lazy_video", False),
@@ -485,6 +512,8 @@ class ALOHADataset(Dataset):
                     ep_copy["returns"] = episode_data.get("returns")
                 if episode_data.get("is_lazy_video", False):
                     ep_copy["video_paths"] = episode_data["video_paths"]
+                if episode_data.get("indexed_frame_store") is not None:
+                    ep_copy["indexed_frame_store"] = episode_data["indexed_frame_store"]
                 self.rollout_data[self.rollout_num_episodes] = ep_copy
                 self.rollout_num_steps += episode_data["num_steps"]
                 self.rollout_num_episodes += 1
@@ -847,6 +876,7 @@ class ALOHADataset(Dataset):
         # Lazy-load videos for this episode if needed (demos or rollouts)
         if (
             episode_data.get("is_lazy_video", False)
+            and episode_data.get("indexed_frame_store") is None
             and not episode_data.get("is_lazy_video_frame_access", False)
             and (
             ("images" not in episode_data) or (episode_data["images"] is None)
@@ -880,7 +910,13 @@ class ALOHADataset(Dataset):
         primary_future = None
         left_future = None
         right_future = None
-        if episode_data.get("is_lazy_video_frame_access", False):
+        if episode_data.get("indexed_frame_store") is not None:
+            store = episode_data["indexed_frame_store"]
+            requested_indices = (relative_step_idx, future_frame_idx)
+            primary_current, primary_future = load_indexed_frames(store, "cam_high", requested_indices)
+            left_current, left_future = load_indexed_frames(store, "cam_left_wrist", requested_indices)
+            right_current, right_future = load_indexed_frames(store, "cam_right_wrist", requested_indices)
+        elif episode_data.get("is_lazy_video_frame_access", False):
             video_paths = episode_data["video_paths"]
             requested_indices = (relative_step_idx, future_frame_idx)
             primary_current, primary_future = load_video_frames(
@@ -932,8 +968,10 @@ class ALOHADataset(Dataset):
             left_future = _ensure_size(left_future)
             right_future = _ensure_size(right_future)
 
-        use_local_frames = episode_data.get("is_lazy_jpeg", False) or episode_data.get(
-            "is_lazy_video_frame_access", False
+        use_local_frames = (
+            episode_data.get("is_lazy_jpeg", False)
+            or episode_data.get("is_lazy_video_frame_access", False)
+            or episode_data.get("indexed_frame_store") is not None
         )
 
         # Build a list of unique frames (no per-frame duplication) and per-frame repeat counts
@@ -1183,6 +1221,7 @@ class ALOHADataset(Dataset):
             "command": episode_data["command"],
             "actions": action_chunk,
             "action_dim_mask": action_dim_mask,
+            "proprio_dim_mask": episode_data["proprio_dim_mask"].copy(),
             "t5_text_embeddings": torch.squeeze(self.t5_text_embeddings[episode_data["command"]]),
             "t5_text_mask": torch.ones(512, dtype=torch.int64),
             "fps": 16,

@@ -10,18 +10,24 @@ input [
   },
   {
     name: "observation__images__base"
-    data_type: TYPE_FP32
-    dims: [3, -1, -1]
+    data_type: TYPE_UINT8
+    dims: [-1]
   },
   {
     name: "observation__images__left_gripper"
-    data_type: TYPE_FP32
-    dims: [3, -1, -1]
+    data_type: TYPE_UINT8
+    dims: [-1]
   },
   {
     name: "observation__images__right_gripper"
-    data_type: TYPE_FP32
-    dims: [3, -1, -1]
+    data_type: TYPE_UINT8
+    dims: [-1]
+  },
+  {
+    name: "image_observation_timestamp_ns"
+    data_type: TYPE_INT64
+    dims: [1]
+    optional: true
   },
   {
     name: "reset"
@@ -54,7 +60,7 @@ parameters [
   },
   {
     key: "EXPERIMENT"
-    value: { string_value: "predict2-2b-evo-q0-state17" }
+    value: { string_value: "predict2-2b-evo-ee6d-joint35-teleop" }
   },
   {
     key: "TASK_DESCRIPTION"

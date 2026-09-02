@@ -49,6 +49,19 @@ class _LossRecordNoEDM:
         return avg_loss
 
 
+ACTION_COMPONENT_METRICS = (
+    "action_ee_mse",
+    "action_joint_mse",
+    "action_gripper_mse",
+    "action_elevator_mse",
+    "action_ee_translation_rmse_m",
+    "action_ee_rotation_rmse_deg",
+    "action_joint_rmse_rad",
+    "action_joint_rmse_deg",
+    "action_elevator_rmse_m",
+)
+
+
 class WandbCallback(WandBCallbackImage):
     def __init__(
         self,
@@ -82,6 +95,9 @@ class WandbCallback(WandBCallbackImage):
         self.train_value_function_sample_value_l1_loss_log = _LossRecordNoEDM()
         self.train_img_unstable_count = torch.zeros(1, device="cuda")
         self.train_video_unstable_count = torch.zeros(1, device="cuda")
+        self.train_action_component_logs = {
+            name: _LossRecordNoEDM() for name in ACTION_COMPONENT_METRICS
+        }
 
         self.val_image_log = _LossRecord()
         self.val_video_log = _LossRecord()
@@ -108,6 +124,9 @@ class WandbCallback(WandBCallbackImage):
         self.val_value_function_sample_value_l1_loss_log = _LossRecordNoEDM()
         self.val_img_unstable_count = torch.zeros(1, device="cuda")
         self.val_video_unstable_count = torch.zeros(1, device="cuda")
+        self.val_action_component_logs = {
+            name: _LossRecordNoEDM() for name in ACTION_COMPONENT_METRICS
+        }
 
         self.logging_iter_multipler = logging_iter_multipler
         self.save_logging_iter_multipler = save_logging_iter_multipler
@@ -154,6 +173,13 @@ class WandbCallback(WandBCallbackImage):
             if not torch.isnan(demo_sample_action_l1_loss):
                 self.train_demo_sample_action_l1_loss_log.loss += demo_sample_action_l1_loss
                 self.train_demo_sample_action_l1_loss_log.iter_count += 1
+            for name, record in self.train_action_component_logs.items():
+                value = output_batch.get(name)
+                if value is not None:
+                    value = value.detach().float()
+                    if torch.isfinite(value):
+                        record.loss += value
+                        record.iter_count += 1
             demo_sample_future_proprio_mse_loss = output_batch["demo_sample_future_proprio_mse_loss"].detach().float()
             if not torch.isnan(demo_sample_future_proprio_mse_loss):
                 self.train_demo_sample_future_proprio_mse_loss_log.loss += demo_sample_future_proprio_mse_loss
@@ -270,6 +296,9 @@ class WandbCallback(WandBCallbackImage):
 
             avg_demo_sample_action_mse_loss = self.train_demo_sample_action_mse_loss_log.get_stat()
             avg_demo_sample_action_l1_loss = self.train_demo_sample_action_l1_loss_log.get_stat()
+            avg_action_components = {
+                name: record.get_stat() for name, record in self.train_action_component_logs.items()
+            }
             avg_future_proprio_mse_loss = self.train_demo_sample_future_proprio_mse_loss_log.get_stat()
             avg_future_proprio_l1_loss = self.train_demo_sample_future_proprio_l1_loss_log.get_stat()
             avg_future_wrist_image_mse_loss = self.train_demo_sample_future_wrist_image_mse_loss_log.get_stat()
@@ -342,6 +371,10 @@ class WandbCallback(WandBCallbackImage):
                         "sample_counter": getattr(self.trainer, "sample_counter", iteration),
                     }
                 )
+                info.update({
+                    f"train{self.wandb_extra_tag}/{name}": value
+                    for name, value in avg_action_components.items()
+                })
                 if self.save_s3:
                     if (
                         iteration
@@ -412,6 +445,13 @@ class WandbCallback(WandBCallbackImage):
             if not torch.isnan(demo_sample_action_l1_loss):
                 self.val_demo_sample_action_l1_loss_log.loss += demo_sample_action_l1_loss
                 self.val_demo_sample_action_l1_loss_log.iter_count += 1
+            for name, record in self.val_action_component_logs.items():
+                value = output_batch.get(name)
+                if value is not None:
+                    value = value.detach().float()
+                    if torch.isfinite(value):
+                        record.loss += value
+                        record.iter_count += 1
             demo_sample_future_proprio_mse_loss = output_batch["demo_sample_future_proprio_mse_loss"].detach().float()
             if not torch.isnan(demo_sample_future_proprio_mse_loss):
                 self.val_demo_sample_future_proprio_mse_loss_log.loss += demo_sample_future_proprio_mse_loss
@@ -524,6 +564,9 @@ class WandbCallback(WandBCallbackImage):
 
             avg_demo_sample_action_mse_loss = self.val_demo_sample_action_mse_loss_log.get_stat()
             avg_demo_sample_action_l1_loss = self.val_demo_sample_action_l1_loss_log.get_stat()
+            avg_action_components = {
+                name: record.get_stat() for name, record in self.val_action_component_logs.items()
+            }
             avg_future_proprio_mse_loss = self.val_demo_sample_future_proprio_mse_loss_log.get_stat()
             avg_future_proprio_l1_loss = self.val_demo_sample_future_proprio_l1_loss_log.get_stat()
             avg_future_wrist_image_mse_loss = self.val_demo_sample_future_wrist_image_mse_loss_log.get_stat()
@@ -594,6 +637,10 @@ class WandbCallback(WandBCallbackImage):
                         f"val{self.wandb_extra_tag}/val_video_unstable_count": self.val_video_unstable_count.item(),
                     }
                 )
+                info.update({
+                    f"val{self.wandb_extra_tag}/{name}": value
+                    for name, value in avg_action_components.items()
+                })
                 if self.save_s3:
                     if (
                         iteration
@@ -610,7 +657,11 @@ class WandbCallback(WandBCallbackImage):
                         )
 
                 if wandb:
-                    wandb.log(info, step=iteration)
+                    # Training metrics have already committed this iteration. Stage
+                    # validation on the next W&B row so it is not dropped as an
+                    # out-of-order write; the following training log commits it.
+                    info["validation/iteration"] = iteration
+                    wandb.log(info, commit=False)
 
                 log.info(f"Validation final loss (iteration {iteration}): {avg_final_loss:4f}")
 

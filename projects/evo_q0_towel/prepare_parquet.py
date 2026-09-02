@@ -20,6 +20,11 @@ import pyarrow.parquet as pq
 from PIL import Image
 
 from cosmos_policy.datasets.evo_q0_actions import ACTION_DIM, ACTION_LAYOUT, CONTRACT_NAME
+from projects.evo_q0_towel.newoffice73_split import (
+    VALIDATION_OUTPUT_INDICES,
+    load_original_split,
+    split_summary,
+)
 
 
 FPS = 30
@@ -205,6 +210,8 @@ def main() -> None:
     parser.add_argument("--image-size", type=int, default=256)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
+    if args.val_count != 6:
+        raise ValueError("the original Evo-only ablation split requires --val-count 6")
 
     roots = {}
     for value in args.dataset:
@@ -212,7 +219,12 @@ def main() -> None:
         if not separator or not name or not raw_path:
             raise ValueError(f"invalid --dataset {value!r}; expected NAME=/path")
         roots[name] = Path(raw_path)
+    split_rows = load_original_split(args.selection)
     selected = load_selection(args.selection, roots)
+    selected_identities = [(dataset, file_index) for dataset, _, file_index in selected]
+    contract_identities = [(str(row["dataset"]), int(row["file_index"])) for row in split_rows]
+    if selected_identities != contract_identities:
+        raise RuntimeError("resolved episode ordering differs from the original Evo-only split contract")
     if args.out.exists():
         if not args.overwrite:
             raise FileExistsError(f"{args.out} exists; pass --overwrite to replace it")
@@ -220,7 +232,7 @@ def main() -> None:
     (args.out / "train").mkdir(parents=True)
     (args.out / "val").mkdir(parents=True)
 
-    val_indices = yam_validation_indices(len(selected), args.val_count)
+    val_indices = set(VALIDATION_OUTPUT_INDICES)
     episodes = []
     for output_index, (dataset, source, source_index) in enumerate(selected):
         split = "val" if output_index in val_indices else "train"
@@ -247,6 +259,7 @@ def main() -> None:
         "selection_file": str(args.selection),
         "validation_method": "yam_linspace_evenly_spaced",
         "validation_output_indices": sorted(val_indices),
+        "ablation_split": split_summary(split_rows),
         "episodes": episodes,
         "counts": {
             "total": len(episodes),

@@ -126,6 +126,92 @@ def action_chunk_mask_to_latent_frame(action_chunk: torch.Tensor, action_dim_mas
     return flat_mask.repeat(1, num_repeats)[:, :latent_elements].reshape_as(latent_frame)
 
 
+def extract_action_chunk_from_latent_frame(
+    latent_frame: torch.Tensor, action_shape: tuple[int, int]
+) -> torch.Tensor:
+    """Decode the repeated action raster exactly as deployment does."""
+    batch_size = latent_frame.shape[0]
+    flat = latent_frame.reshape(batch_size, -1)
+    action_elements = action_shape[0] * action_shape[1]
+    repeats = flat.shape[1] // action_elements
+    if repeats < 1:
+        raise ValueError("action latent does not contain one complete action chunk")
+    chunks = flat[:, : repeats * action_elements].reshape(
+        batch_size, repeats, action_shape[0], action_shape[1]
+    )
+    return chunks.mean(dim=1)
+
+
+def _rotation_6d_to_matrix_torch(rotation_6d: torch.Tensor) -> torch.Tensor:
+    a1, a2 = rotation_6d[..., :3], rotation_6d[..., 3:]
+    b1 = torch.nn.functional.normalize(a1, dim=-1, eps=1e-8)
+    b2 = torch.nn.functional.normalize(
+        a2 - (b1 * a2).sum(dim=-1, keepdim=True) * b1, dim=-1, eps=1e-8
+    )
+    b3 = torch.linalg.cross(b1, b2, dim=-1)
+    return torch.stack((b1, b2, b3), dim=-1)
+
+
+def shared_35d_action_metrics(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+    physical_scale: torch.Tensor | None,
+) -> dict[str, torch.Tensor]:
+    """Return normalized per-space MSE and interpretable physical RMSE metrics."""
+    if predicted.shape != target.shape or target.shape[-1] != 35:
+        return {}
+    predicted_metric = predicted.detach().float()
+    target_metric = target.detach().float()
+    if mask.ndim == 2:
+        mask = mask[:, None, :].expand_as(target)
+    mask = mask.to(device=target.device, dtype=torch.float32)
+    diff = predicted_metric - target_metric
+
+    def masked_mse(indices: list[int], values: torch.Tensor = diff) -> torch.Tensor:
+        selected_mask = mask[..., indices]
+        denom = selected_mask.sum().clamp_min(1)
+        return ((values[..., indices] ** 2) * selected_mask).sum() / denom
+
+    ee_indices = list(range(18))
+    translation_indices = [0, 1, 2, 9, 10, 11]
+    joint_indices = [*range(18, 25), *range(26, 33)]
+    gripper_indices = [25, 33]
+    metrics = {
+        "action_ee_mse": masked_mse(ee_indices),
+        "action_joint_mse": masked_mse(joint_indices),
+        "action_gripper_mse": masked_mse(gripper_indices),
+        "action_elevator_mse": masked_mse([34]),
+    }
+
+    if physical_scale is not None:
+        scale = physical_scale.to(device=diff.device, dtype=diff.dtype)
+        if scale.ndim == 2:
+            scale = scale[:, None, :]
+        physical_diff = diff * scale
+        metrics["action_ee_translation_rmse_m"] = torch.sqrt(
+            masked_mse(translation_indices, physical_diff)
+        )
+        metrics["action_joint_rmse_rad"] = torch.sqrt(masked_mse(joint_indices, physical_diff))
+        metrics["action_joint_rmse_deg"] = metrics["action_joint_rmse_rad"] * (180.0 / torch.pi)
+        metrics["action_elevator_rmse_m"] = torch.sqrt(masked_mse([34], physical_diff))
+
+    rotation_errors = []
+    for rotation_slice in (slice(3, 9), slice(12, 18)):
+        predicted_rotation = _rotation_6d_to_matrix_torch(predicted_metric[..., rotation_slice])
+        target_rotation = _rotation_6d_to_matrix_torch(target_metric[..., rotation_slice])
+        relative = predicted_rotation.transpose(-1, -2) @ target_rotation
+        cosine = ((relative.diagonal(dim1=-2, dim2=-1).sum(dim=-1) - 1.0) / 2.0).clamp(-1.0, 1.0)
+        rotation_errors.append(torch.acos(cosine))
+    rotation_error = torch.stack(rotation_errors, dim=-1)
+    rotation_mask = torch.stack((mask[..., 3:9].amin(dim=-1), mask[..., 12:18].amin(dim=-1)), dim=-1)
+    metrics["action_ee_rotation_rmse_deg"] = (
+        torch.sqrt(((rotation_error**2) * rotation_mask).sum() / rotation_mask.sum().clamp_min(1))
+        * (180.0 / torch.pi)
+    )
+    return metrics
+
+
 def proprio_mask_to_latent_frame(
     proprio: torch.Tensor, proprio_dim_mask: torch.Tensor, latent_frame: torch.Tensor
 ) -> torch.Tensor:
@@ -334,6 +420,15 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
             value_indices=data_batch["value_latent_idx"],
         )
 
+        output_batch.update(
+            shared_35d_action_metrics(
+                output_batch["predicted_action_chunk"],
+                data_batch["actions"],
+                data_batch.get("action_dim_mask", torch.ones_like(data_batch["actions"])),
+                data_batch.get("action_denormalization_scale"),
+            )
+        )
+
         if self.loss_reduce == "mean":
             kendall_loss = kendall_loss.mean() * self.loss_scale
         elif self.loss_reduce == "sum":
@@ -342,6 +437,19 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
             raise ValueError(f"Invalid loss_reduce: {self.loss_reduce}")
 
         return output_batch, kendall_loss
+
+    @torch.no_grad()
+    def validation_step(
+        self, data_batch: dict[str, torch.Tensor], iteration: int
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        """Evaluate the policy supervised diffusion objective on held-out data.
+
+        Predict2 base validation generates samples and requires the world-model-only
+        ``guidance`` field. Policy data lacks it, and that path does not produce the
+        action/proprio metrics consumed by our validation callback. Reuse the policy
+        objective in eval/no-grad mode to preserve training masks and normalization.
+        """
+        return self.training_step(data_batch, iteration)
 
     def compute_loss_with_epsilon_and_sigma(
         self,
@@ -757,8 +865,13 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
             all_samples_value_mse_loss = nan
             all_samples_value_l1_loss = nan
 
+        predicted_action_chunk = extract_action_chunk_from_latent_frame(
+            model_pred.x0[batch_indices, :, action_indices, :, :],
+            (action_chunk.shape[1], action_chunk.shape[2]),
+        )
         output_batch = {
             "x0": x0_B_C_T_H_W,
+            "predicted_action_chunk": predicted_action_chunk,
             "xt": xt_B_C_T_H_W,
             "sigma": sigma_B_T,
             "weights_per_sigma": weights_per_sigma_B_T,

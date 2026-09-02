@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from backends.cosmos_policy_backend import ACTION_DIM, CHUNK_SIZE, CosmosPolicyBackend
+from backends.cosmos_policy_backend import CHUNK_SIZE, DEPLOYED_ACTION_DIM, CosmosPolicyBackend
 
 
 def main() -> None:
@@ -15,7 +15,7 @@ def main() -> None:
         "name": "slot_b",
         "parameters": {
             "EXPERIMENT": {
-                "string_value": "predict2-2b-evo-q0-state17"
+                "string_value": "predict2-2b-evo-ee6d-joint35-teleop"
             },
             "TASK_DESCRIPTION": {
                 "string_value": "fold the blue towel twice"
@@ -57,8 +57,10 @@ def main() -> None:
     )
     result = backend.infer(processed)
     actions = np.asarray(result["action"], dtype=np.float32)
-    assert actions.shape == (CHUNK_SIZE, ACTION_DIM), actions.shape
+    assert actions.shape == (CHUNK_SIZE, DEPLOYED_ACTION_DIM), actions.shape
     assert np.isfinite(actions).all()
+    assert backend.model.sde.sigma_max == 80.0
+    assert backend.model.sde.sigma_min == 4.0
     print(
         json.dumps(
             {
@@ -68,6 +70,8 @@ def main() -> None:
                 "action_shape": list(actions.shape),
                 "action_min": float(actions.min()),
                 "action_max": float(actions.max()),
+                "sigma_max": backend.model.sde.sigma_max,
+                "sigma_min": backend.model.sde.sigma_min,
                 "thor_fallbacks": backend.fallbacks,
             },
             sort_keys=True,

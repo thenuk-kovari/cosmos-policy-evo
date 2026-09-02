@@ -49,6 +49,12 @@ UMI_CONSTANTS = {
     "PROPRIO_DIM": 14,
 }
 
+GENROBOT_EE_Q0_CONSTANTS = {
+    "NUM_ACTIONS_CHUNK": 50,
+    "ACTION_DIM": 35,
+    "PROPRIO_DIM": 17,
+}
+
 EVO_Q0_CONSTANTS = {
     "NUM_ACTIONS_CHUNK": 50,
     "ACTION_DIM": 17,
@@ -64,6 +70,8 @@ def detect_robot_platform():
         return "LIBERO"
     elif "robocasa" in cmd_args:
         return "ROBOCASA"
+    elif "genrobot" in cmd_args or "ee6d" in cmd_args:
+        return "GENROBOT_EE_Q0"
     elif "evo-q0" in cmd_args or "evo_q0" in cmd_args:
         return "EVO_Q0"
     elif "umi" in cmd_args or "evo" in cmd_args:
@@ -87,6 +95,8 @@ elif ROBOT_PLATFORM == "ALOHA":
     constants = ALOHA_CONSTANTS
 elif ROBOT_PLATFORM == "UMI":
     constants = UMI_CONSTANTS
+elif ROBOT_PLATFORM == "GENROBOT_EE_Q0":
+    constants = GENROBOT_EE_Q0_CONSTANTS
 elif ROBOT_PLATFORM == "EVO_Q0":
     constants = EVO_Q0_CONSTANTS
 
